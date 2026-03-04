@@ -120,6 +120,22 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         hook.initializeReserves(INITIAL_LIQUIDITY);
     }
 
+    function test_setUp() public view {
+        assertEq(hook.reserves(collateralCurrency), INITIAL_LIQUIDITY);
+        assertEq(hook.reserves(yesCurrency), INITIAL_LIQUIDITY);
+        assertEq(hook.reserves(noCurrency), INITIAL_LIQUIDITY);
+        assertTrue(hook.initialized());
+        assertEq(hook.funding(), FUNDING);
+    }
+
+    function test_tokenImmutables() public view {
+        assertEq(Currency.unwrap(hook.collateralToken()), address(collateral));
+        assertEq(Currency.unwrap(hook.yesToken()), Currency.unwrap(yesCurrency));
+        assertEq(Currency.unwrap(hook.noToken()), Currency.unwrap(noCurrency));
+        assertEq(address(hook.conditionalTokens()), address(conditionalMarkets));
+        assertEq(hook.conditionId(), CONDITION_ID);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     function _makePoolKey(Currency a, Currency b) internal view returns (PoolKey memory) {

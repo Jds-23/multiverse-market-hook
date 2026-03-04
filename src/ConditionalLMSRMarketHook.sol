@@ -7,6 +7,7 @@ import {IPoolManager, SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {ConditionalMarkets} from "./ConditionalMarkets.sol";
 
 contract ConditionalLMSRMarketHook is BaseHook {
@@ -85,8 +86,18 @@ contract ConditionalLMSRMarketHook is BaseHook {
         revert NotImplementedYet();
     }
 
-    function initializeReserves(uint256) external pure {
-        revert NotImplementedYet();
+    function initializeReserves(uint256 amount) external {
+        SafeTransferLib.safeTransferFrom(
+            Currency.unwrap(collateralToken), msg.sender, address(this), amount
+        );
+        SafeTransferLib.safeApprove(
+            Currency.unwrap(collateralToken), address(conditionalTokens), amount
+        );
+        conditionalTokens.split(conditionId, amount);
+        reserves[collateralToken] = amount;
+        reserves[yesToken] = amount;
+        reserves[noToken] = amount;
+        initialized = true;
     }
 
     function calcMarginalPrice(Currency) public pure returns (uint256) {

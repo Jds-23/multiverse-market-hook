@@ -228,6 +228,20 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         assertEq(hook.reserves(yesCurrency), INITIAL_LIQUIDITY + deltaYes);
     }
 
+    function test_buy_no_success() public {
+        collateral.mint(address(poolManager), INITIAL_LIQUIDITY * 10);
+        uint256 deltaNO = 100e6;
+        uint256 noBefore = IERC20(Currency.unwrap(noCurrency)).balanceOf(address(this));
+        uint256 colBefore = collateral.balanceOf(address(this));
+
+        swapExactOutput(address(collateral), Currency.unwrap(noCurrency), deltaNO, type(uint256).max);
+
+        uint256 noAfter = IERC20(Currency.unwrap(noCurrency)).balanceOf(address(this));
+        assertEq(noAfter - noBefore, deltaNO);
+        assertGt(colBefore - collateral.balanceOf(address(this)), 0);
+        assertEq(hook.reserves(noCurrency), INITIAL_LIQUIDITY + deltaNO);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     function _makePoolKey(Currency a, Currency b) internal view returns (PoolKey memory) {

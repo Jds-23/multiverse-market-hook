@@ -27,7 +27,7 @@ contract ConditionalLMSRMarketHook is BaseHook {
     Currency public immutable collateralToken;
     Currency public immutable yesToken;
     Currency public immutable noToken;
-    ConditionalMarkets public immutable conditionalTokens;
+    ConditionalMarkets public immutable conditionalMarket;
     bytes32 public immutable conditionId;
 
     mapping(Currency => uint256) public reserves;
@@ -39,14 +39,14 @@ contract ConditionalLMSRMarketHook is BaseHook {
         Currency _collateralToken,
         Currency _yesToken,
         Currency _noToken,
-        ConditionalMarkets _conditionalTokens,
+        ConditionalMarkets _conditionalMarket,
         bytes32 _conditionId,
         uint256 _funding
     ) BaseHook(_poolManager) {
         collateralToken = _collateralToken;
         yesToken = _yesToken;
         noToken = _noToken;
-        conditionalTokens = _conditionalTokens;
+        conditionalMarket = _conditionalMarket;
         conditionId = _conditionId;
         funding = _funding;
     }
@@ -87,10 +87,10 @@ contract ConditionalLMSRMarketHook is BaseHook {
         }
 
         if (isBuy) {
-            if (conditionalTokens.resolved(conditionId) != address(0)) revert MarketResolved();
+            if (conditionalMarket.resolved(conditionId) != address(0)) revert MarketResolved();
             return _executeBuy(tokenIn, tokenOut, params);
         } else {
-            address winner = conditionalTokens.resolved(conditionId);
+            address winner = conditionalMarket.resolved(conditionId);
             if (winner == address(0)) {
                 return _executeSell(tokenIn, tokenOut, params);
             } else {
@@ -131,9 +131,9 @@ contract ConditionalLMSRMarketHook is BaseHook {
             Currency.unwrap(collateralToken), msg.sender, address(this), amount
         );
         SafeTransferLib.safeApprove(
-            Currency.unwrap(collateralToken), address(conditionalTokens), amount
+            Currency.unwrap(collateralToken), address(conditionalMarket), amount
         );
-        conditionalTokens.split(conditionId, amount);
+        conditionalMarket.split(conditionId, amount);
         reserves[collateralToken] = amount;
         reserves[yesToken] = amount;
         reserves[noToken] = amount;
@@ -176,9 +176,9 @@ contract ConditionalLMSRMarketHook is BaseHook {
         if (cost == 0) revert InsufficientLiquidity();
         poolManager.take(tokenIn, address(this), cost);
         SafeTransferLib.safeApprove(
-            Currency.unwrap(collateralToken), address(conditionalTokens), cost
+            Currency.unwrap(collateralToken), address(conditionalMarket), cost
         );
-        conditionalTokens.split(conditionId, cost);
+        conditionalMarket.split(conditionId, cost);
 
         // Provide outcome tokens to poolManager for the swapper
         poolManager.sync(tokenOut);
@@ -223,7 +223,7 @@ contract ConditionalLMSRMarketHook is BaseHook {
 
         // Merge YES+NO → collateral (burns from hook, no approval needed — OutcomeToken.burn is onlyOwner)
         // Note: merge burns collateralOut amount of BOTH YES and NO tokens, regardless of which is tokenIn
-        conditionalTokens.merge(conditionId, collateralOut);
+        conditionalMarket.merge(conditionId, collateralOut);
 
         // Send collateral to PM for the swapper to take
         poolManager.sync(tokenOut);
@@ -249,7 +249,7 @@ contract ConditionalLMSRMarketHook is BaseHook {
             : uint256(params.amountSpecified);
 
         poolManager.take(tokenIn, address(this), amount);
-        conditionalTokens.redeem(Currency.unwrap(tokenIn), amount);
+        conditionalMarket.redeem(Currency.unwrap(tokenIn), amount);
 
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), amount);
@@ -309,9 +309,9 @@ contract ConditionalLMSRMarketHook is BaseHook {
     //         // Take collateral from PM, split into outcome tokens, send requested outcome to PM
     //         poolManager.take(tokenIn, address(this), collateralAmount);
     //         SafeTransferLib.safeApprove(
-    //             Currency.unwrap(collateralToken), address(conditionalTokens), collateralAmount
+    //             Currency.unwrap(collateralToken), address(conditionalMarket), collateralAmount
     //         );
-    //         conditionalTokens.split(conditionId, collateralAmount);
+    //         conditionalMarket.split(conditionId, collateralAmount);
 
     //         poolManager.sync(tokenOut);
     //         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), outcomeDelta);
@@ -324,7 +324,7 @@ contract ConditionalLMSRMarketHook is BaseHook {
     //     } else {
     //         // Take outcome tokens from PM, merge YES+NO into collateral, send collateral to PM
     //         poolManager.take(tokenIn, address(this), outcomeDelta);
-    //         conditionalTokens.merge(conditionId, collateralAmount);
+    //         conditionalMarket.merge(conditionId, collateralAmount);
 
     //         poolManager.sync(tokenOut);
     //         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), collateralAmount);

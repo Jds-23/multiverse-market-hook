@@ -137,7 +137,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         assertEq(Currency.unwrap(hook.collateralToken()), address(collateral));
         assertEq(Currency.unwrap(hook.yesToken()), Currency.unwrap(yesCurrency));
         assertEq(Currency.unwrap(hook.noToken()), Currency.unwrap(noCurrency));
-        assertEq(address(hook.conditionalTokens()), address(conditionalMarkets));
+        assertEq(address(hook.conditionalMarket()), address(conditionalMarkets));
         assertEq(hook.conditionId(), CONDITION_ID);
     }
 

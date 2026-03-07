@@ -324,6 +324,27 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         assertEq(hook.reserves(yesCurrency), (INITIAL_LIQUIDITY + buyCost) - sellCollateralOut, "Hook YES reserves after sell");
     }
 
+    function test_redeem_winner_post_resolution() public {
+        collateral.mint(address(poolManager), INITIAL_LIQUIDITY * 10);
+
+        // Buy YES tokens
+        swapExactOutput(address(collateral), Currency.unwrap(yesCurrency), 100e6, type(uint256).max);
+
+        // Resolve: YES wins
+        conditionalMarkets.resolve(CONDITION_ID, Currency.unwrap(yesCurrency));
+
+        uint256 yesToRedeem = 100e6;
+        uint256 yesBefore = IERC20(Currency.unwrap(yesCurrency)).balanceOf(address(this));
+        uint256 colBefore = collateral.balanceOf(address(this));
+
+        // Redeem: pre-transfer YES to PM (hook takes via PM.take), then callback settles delta
+        IERC20(Currency.unwrap(yesCurrency)).transfer(address(poolManager), yesToRedeem);
+        swap(Currency.unwrap(yesCurrency), address(collateral), yesToRedeem);
+
+        assertEq(collateral.balanceOf(address(this)) - colBefore, yesToRedeem, "Redeem: 1:1 collateral");
+        assertEq(yesBefore - IERC20(Currency.unwrap(yesCurrency)).balanceOf(address(this)), yesToRedeem + yesToRedeem, "Redeem: YES decreased by transferred + settled");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     function _makePoolKey(Currency a, Currency b) internal view returns (PoolKey memory) {

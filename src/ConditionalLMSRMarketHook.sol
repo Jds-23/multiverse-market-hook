@@ -18,6 +18,7 @@ contract ConditionalLMSRMarketHook is BaseHook {
     error InsufficientLiquidity();
     error OnlyExactOutputSwaps();
     error OnlyExactInputSells();
+    error OnlyExactInputRedemptions();
     error CrossOutcomeSwapsNotSupportedYet();
     error TokenNotWinner();
 
@@ -94,10 +95,9 @@ contract ConditionalLMSRMarketHook is BaseHook {
                 return _executeSell(tokenIn, tokenOut, params);
             } else {
                 if (winner != Currency.unwrap(tokenIn)) revert TokenNotWinner();
-                // here implementation of this condition will go
+                return _executeRedeem(tokenIn, tokenOut, params);
             }
         }
-        revert NotImplementedYet();
     }
 
     function _isOutcomeToken(Currency token) internal view returns (bool) {
@@ -237,6 +237,23 @@ contract ConditionalLMSRMarketHook is BaseHook {
         reserves[collateralToken] -= collateralOut;
 
         return (this.beforeSwap.selector, toBeforeSwapDelta(int128(int256(tokensIn)), -int128(int256(collateralOut))), 0);
+    }
+
+    function _executeRedeem(Currency tokenIn, Currency tokenOut, SwapParams calldata params)
+        private
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        if (params.amountSpecified >= 0) revert OnlyExactInputRedemptions();
+        uint256 amount = uint256(-params.amountSpecified);
+
+        poolManager.take(tokenIn, address(this), amount);
+        conditionalTokens.redeem(Currency.unwrap(tokenIn), amount);
+
+        poolManager.sync(tokenOut);
+        SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), amount);
+        poolManager.settle();
+
+        return (this.beforeSwap.selector, toBeforeSwapDelta(int128(int256(amount)), -int128(int256(amount))), 0);
     }
 
     // compilation error stack too deep

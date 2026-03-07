@@ -383,6 +383,39 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         assertEq(collateral.balanceOf(address(this)) - colBefore, colToRedeem, "Redeem: received exact collateral");
     }
 
+    // ── Integration ────────────────────────────────────────────────────
+
+    function test_full_lifecycle() public {
+        collateral.mint(address(poolManager), INITIAL_LIQUIDITY * 10);
+
+        // 1. Buy 200 YES tokens
+        uint256 yesBefore = IERC20(Currency.unwrap(yesCurrency)).balanceOf(address(this));
+        uint256 colBefore = collateral.balanceOf(address(this));
+        swapExactOutput(address(collateral), Currency.unwrap(yesCurrency), 200e6, type(uint256).max);
+        assertEq(IERC20(Currency.unwrap(yesCurrency)).balanceOf(address(this)) - yesBefore, 200e6, "Buy: +200 YES");
+        uint256 buyCost = colBefore - collateral.balanceOf(address(this));
+        assertGt(buyCost, 0, "Buy: paid collateral");
+
+        // 2. Sell 100 YES back (exact-input, pre-transfer to PM)
+        uint256 yesBeforeSell = IERC20(Currency.unwrap(yesCurrency)).balanceOf(address(this));
+        colBefore = collateral.balanceOf(address(this));
+        IERC20(Currency.unwrap(yesCurrency)).transfer(address(poolManager), 100e6);
+        swap(Currency.unwrap(yesCurrency), address(collateral), 100e6);
+        // Sell consumes 2x tokens: pre-transfer + callback settle
+        assertEq(yesBeforeSell - IERC20(Currency.unwrap(yesCurrency)).balanceOf(address(this)), 200e6, "Sell: 2x YES consumed");
+        uint256 sellProceeds = collateral.balanceOf(address(this)) - colBefore;
+        assertGt(sellProceeds, 0, "Sell: received collateral");
+
+        // 3. Resolve: YES wins
+        conditionalMarkets.resolve(CONDITION_ID, Currency.unwrap(yesCurrency));
+
+        // 4. Redeem 100 YES → 100 collateral (1:1)
+        colBefore = collateral.balanceOf(address(this));
+        IERC20(Currency.unwrap(yesCurrency)).transfer(address(poolManager), 100e6);
+        swap(Currency.unwrap(yesCurrency), address(collateral), 100e6);
+        assertEq(collateral.balanceOf(address(this)) - colBefore, 100e6, "Redeem: 1:1 collateral");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     function _makePoolKey(Currency a, Currency b) internal view returns (PoolKey memory) {

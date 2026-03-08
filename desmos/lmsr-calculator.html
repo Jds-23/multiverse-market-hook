@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LMSR Calculator — Conditional Market Hook</title>
+  <!-- Desmos API (demo key — TODO: replace with production key) -->
+  <script src="https://www.desmos.com/api/v1.9/calculator.js?apiKey=dcb31709b452b1cf9dc26972add0fda6"></script>
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #fff;
+      color: #1a1a1a;
+      margin: 0;
+      padding: 24px 16px 64px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.75rem;
+      margin-bottom: 0.25em;
+    }
+    h1 + p { color: #555; margin-top: 0; }
+    h2 {
+      font-size: 1.35rem;
+      margin-top: 2.5em;
+      padding-top: 1em;
+      border-top: 1px solid #e0e0e0;
+    }
+    .formula {
+      background: #f8f9fa;
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin: 12px 0;
+      overflow-x: auto;
+    }
+    .note {
+      background: #fffbe6;
+      border-left: 3px solid #f0c000;
+      padding: 8px 12px;
+      margin: 12px 0;
+      font-size: 0.92em;
+    }
+    .graph-container {
+      width: 100%;
+      height: 600px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      margin: 16px 0;
+    }
+    /* Section 5: calculator */
+    .calc-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-top: 16px;
+    }
+    @media (max-width: 600px) {
+      .calc-grid { grid-template-columns: 1fr; }
+    }
+    .calc-inputs, .calc-outputs {
+      background: #f8f9fa;
+      border-radius: 6px;
+      padding: 16px;
+    }
+    .calc-inputs label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      font-size: 0.93em;
+    }
+    .calc-inputs input[type="number"] {
+      width: 90px;
+      padding: 4px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 0.93em;
+    }
+    .toggle-group {
+      display: flex;
+      gap: 0;
+      margin-bottom: 10px;
+    }
+    .toggle-group button {
+      flex: 1;
+      padding: 6px 0;
+      border: 1px solid #ccc;
+      background: #fff;
+      cursor: pointer;
+      font-size: 0.93em;
+      transition: background 0.15s;
+    }
+    .toggle-group button:first-child { border-radius: 4px 0 0 4px; }
+    .toggle-group button:last-child { border-radius: 0 4px 4px 0; }
+    .toggle-group button.active {
+      background: #2563eb;
+      color: #fff;
+      border-color: #2563eb;
+    }
+    .calc-outputs table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.93em;
+    }
+    .calc-outputs td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #e5e5e5;
+    }
+    .calc-outputs td:last-child {
+      text-align: right;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+      font-size: 0.92em;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+<h1>LMSR Calculator</h1>
+<p>Interactive explorer for Logarithmic Market Scoring Rule pricing mechanics.</p>
+
+<!-- ================================================================== -->
+<!-- Section 1: Cost Function -->
+<!-- ================================================================== -->
+<h2>1. Cost Function</h2>
+<p>The LMSR cost function aggregates outstanding token quantities into a single collateral value.</p>
+
+<div class="formula">
+  $$C(q_y, q_n) = b \cdot \ln\!\bigl(e^{q_y/b} + e^{q_n/b}\bigr), \quad b = \frac{\text{funding}}{\ln 2}$$
+</div>
+
+<div class="note">When $q_y = q_n$, the cost simplifies to $C = q + \text{funding}$.</div>
+
+<div id="graph-cost" class="graph-container"></div>
+
+<!-- ================================================================== -->
+<!-- Section 2: Marginal Price Sigmoid -->
+<!-- ================================================================== -->
+<h2>2. Marginal Price (Sigmoid)</h2>
+<p>The marginal price of YES is the partial derivative of the cost function — a logistic sigmoid in the difference $q_y - q_n$.</p>
+
+<div class="formula">
+  $$p_{\text{yes}} = \frac{1}{1 + e^{-(q_y - q_n)/b}}$$
+</div>
+
+<div class="note">Steeper curve = lower funding = more price sensitivity.</div>
+
+<div id="graph-sigmoid" class="graph-container"></div>
+
+<!-- ================================================================== -->
+<!-- Section 3: Net Cost of Trade -->
+<!-- ================================================================== -->
+<h2>3. Net Cost of Trade</h2>
+<p>The net cost to buy $\Delta$ YES tokens is the difference in cost function before and after the trade.</p>
+
+<div class="formula">
+  $$\text{netCost}(\Delta) = C(q_y + \Delta,\; q_n) - C(q_y,\; q_n)$$
+</div>
+
+<div id="graph-netcost" class="graph-container"></div>
+
+<!-- ================================================================== -->
+<!-- Section 4: Token Cost Explorer -->
+<!-- ================================================================== -->
+<h2>4. Token Cost Explorer</h2>
+<p>Overlay of marginal price and net cost curves. The shaded area under the marginal price curve from $0$ to $\Delta$ equals the net cost.</p>
+
+<div class="formula">
+  $$M(\delta) = \frac{1}{1 + e^{-(q_y + \delta - q_n)/b}}, \qquad N(\Delta) = \int_0^{\Delta} M(\delta)\,d\delta$$
+</div>
+<div class="formula">
+  $$\text{avg price} = \frac{N(\Delta)}{\Delta}, \qquad \text{slippage} = \text{avg price} - M(0)$$
+</div>
+
+<div id="graph-explorer" class="graph-container"></div>
+
+<!-- ================================================================== -->
+<!-- Section 5: Interactive Trade Calculator -->
+<!-- ================================================================== -->
+<h2>5. Interactive Trade Calculator</h2>
+<p>Compute exact LMSR trade metrics. All values update live.</p>
+
+<div class="formula">
+  $$b = \frac{\text{funding}}{\ln 2}, \quad p_{\text{yes}} = \frac{e^{q_y/b}}{e^{q_y/b}+e^{q_n/b}}, \quad \text{netCost} = b\ln\!\frac{e^{(q_y+\Delta)/b}+e^{q_n/b}}{e^{q_y/b}+e^{q_n/b}}$$
+</div>
+
+<div class="calc-grid">
+  <div class="calc-inputs">
+    <h3 style="margin-top:0">Inputs</h3>
+    <label>Funding <input type="number" id="in-funding" value="100" min="1" step="1"></label>
+    <label>$q_{\text{yes}}$ <input type="number" id="in-qy" value="60" step="1"></label>
+    <label>$q_{\text{no}}$ <input type="number" id="in-qn" value="20" step="1"></label>
+    <p style="margin-bottom:4px;font-size:0.9em">Trade side</p>
+    <div class="toggle-group">
+      <button id="btn-yes" class="active" onclick="setSide('YES')">YES</button>
+      <button id="btn-no" onclick="setSide('NO')">NO</button>
+    </div>
+    <label>$\Delta$ (tokens) <input type="number" id="in-delta" value="25" min="0" step="1"></label>
+  </div>
+  <div class="calc-outputs">
+    <h3 style="margin-top:0">Outputs</h3>
+    <table>
+      <tr><td>$b$</td><td id="out-b"></td></tr>
+      <tr><td>Pre-trade $p_{\text{yes}}$</td><td id="out-pre-yes"></td></tr>
+      <tr><td>Pre-trade $p_{\text{no}}$</td><td id="out-pre-no"></td></tr>
+      <tr><td>Post-trade $p_{\text{yes}}$</td><td id="out-post-yes"></td></tr>
+      <tr><td>Post-trade $p_{\text{no}}$</td><td id="out-post-no"></td></tr>
+      <tr><td>Net cost</td><td id="out-netcost"></td></tr>
+      <tr><td>Avg price</td><td id="out-avg"></td></tr>
+      <tr><td>Slippage (abs)</td><td id="out-slip-abs"></td></tr>
+      <tr><td>Slippage (%)</td><td id="out-slip-pct"></td></tr>
+      <tr><td>Price impact</td><td id="out-impact"></td></tr>
+    </table>
+  </div>
+</div>
+
+</div><!-- .container -->
+
+<script>
+// ── Helpers ──────────────────────────────────────────────────────────
+// Log-sum-exp with offset trick for numerical stability
+function logSumExp(a, b) {
+  const m = Math.max(a, b);
+  return m + Math.log(Math.exp(a - m) + Math.exp(b - m));
+}
+
+function costFn(qy, qn, b) {
+  return b * logSumExp(qy / b, qn / b);
+}
+
+function marginalYes(qy, qn, b) {
+  const d = (qy - qn) / b;
+  // sigmoid with overflow protection
+  if (d > 500) return 1;
+  if (d < -500) return 0;
+  return 1 / (1 + Math.exp(-d));
+}
+
+// ── Section 1: Cost Function ────────────────────────────────────────
+(function () {
+  var elt = document.getElementById('graph-cost');
+  var calc = Desmos.GraphingCalculator(elt, {
+    expressions: true,
+    settingsMenu: false,
+    zoomButtons: true,
+    keypad: false
+  });
+
+  calc.setMathBounds({ left: 0, right: 200, bottom: 0, top: 300 });
+
+  calc.setExpression({ id: 'funding', latex: 'f = 100', sliderBounds: { min: '10', max: '500', step: '1' } });
+  calc.setExpression({ id: 'qn', latex: 'q_n = 30', sliderBounds: { min: '0', max: '200', step: '1' } });
+  calc.setExpression({ id: 'b', latex: 'b = f / \\ln(2)' });
+  // Cost function C(x) with q_y = x, q_n fixed
+  calc.setExpression({ id: 'cost', latex: 'C(x) = b \\cdot \\ln(e^{x/b} + e^{q_n/b})', color: Desmos.Colors.BLUE });
+  // Annotations
+  calc.setExpression({ id: 'pt0', latex: '(0, C(0))', label: 'C(0, q_n)', showLabel: true, color: Desmos.Colors.RED, pointStyle: Desmos.Styles.POINT });
+  calc.setExpression({ id: 'ptsym', latex: '(q_n, C(q_n))', label: 'symmetric point', showLabel: true, color: Desmos.Colors.GREEN, pointStyle: Desmos.Styles.POINT });
+})();
+
+// ── Section 2: Marginal Price Sigmoid ───────────────────────────────
+(function () {
+  var elt = document.getElementById('graph-sigmoid');
+  var calc = Desmos.GraphingCalculator(elt, {
+    expressions: true,
+    settingsMenu: false,
+    zoomButtons: true,
+    keypad: false
+  });
+
+  calc.setMathBounds({ left: -300, right: 300, bottom: -0.1, top: 1.1 });
+
+  calc.setExpression({ id: 'f1', latex: 'f_1 = 100', sliderBounds: { min: '10', max: '500', step: '1' } });
+  calc.setExpression({ id: 'f2', latex: 'f_2 = 50', sliderBounds: { min: '10', max: '500', step: '1' } });
+  calc.setExpression({ id: 'd0', latex: 'd_0 = 50', sliderBounds: { min: '-300', max: '300', step: '1' } });
+
+  calc.setExpression({ id: 'b1', latex: 'b_1 = f_1 / \\ln(2)' });
+  calc.setExpression({ id: 'b2', latex: 'b_2 = f_2 / \\ln(2)' });
+
+  // Sigmoid curves
+  calc.setExpression({ id: 'sig1', latex: 'P_1(x) = \\frac{1}{1 + e^{-x/b_1}}', color: Desmos.Colors.BLUE });
+  calc.setExpression({ id: 'sig2', latex: 'P_2(x) = \\frac{1}{1 + e^{-x/b_2}}', color: Desmos.Colors.RED });
+
+  // Dashed reference lines
+  calc.setExpression({ id: 'ref0', latex: 'y = 0', lineStyle: Desmos.Styles.DASHED, color: '#999' });
+  calc.setExpression({ id: 'ref05', latex: 'y = 0.5', lineStyle: Desmos.Styles.DASHED, color: '#999' });
+  calc.setExpression({ id: 'ref1', latex: 'y = 1', lineStyle: Desmos.Styles.DASHED, color: '#999' });
+
+  // Inspection point
+  calc.setExpression({ id: 'ptinsp', latex: '(d_0, P_1(d_0))', label: 'P(d₀)', showLabel: true, color: Desmos.Colors.PURPLE, pointStyle: Desmos.Styles.POINT });
+})();
+
+// ── Section 3: Net Cost of Trade ────────────────────────────────────
+(function () {
+  var elt = document.getElementById('graph-netcost');
+  var calc = Desmos.GraphingCalculator(elt, {
+    expressions: true,
+    settingsMenu: false,
+    zoomButtons: true,
+    keypad: false
+  });
+
+  calc.setMathBounds({ left: -100, right: 150, bottom: -80, top: 120 });
+
+  calc.setExpression({ id: 'f', latex: 'f = 100', sliderBounds: { min: '10', max: '500', step: '1' } });
+  calc.setExpression({ id: 'qy', latex: 'q_y = 60', sliderBounds: { min: '0', max: '200', step: '1' } });
+  calc.setExpression({ id: 'qn', latex: 'q_n = 20', sliderBounds: { min: '0', max: '200', step: '1' } });
+  calc.setExpression({ id: 'd0', latex: 'd_0 = 25', sliderBounds: { min: '-100', max: '150', step: '1' } });
+  calc.setExpression({ id: 'b', latex: 'b = f / \\ln(2)' });
+
+  // Cost helper
+  calc.setExpression({ id: 'Cfn', latex: 'C(a, c) = b \\cdot \\ln(e^{a/b} + e^{c/b})' });
+  // Net cost curve
+  calc.setExpression({ id: 'netcost', latex: 'N(x) = C(q_y + x, q_n) - C(q_y, q_n)', color: Desmos.Colors.BLUE });
+
+  // Annotations
+  calc.setExpression({ id: 'ptorigin', latex: '(0, 0)', label: 'no trade', showLabel: true, color: '#999', pointStyle: Desmos.Styles.POINT });
+  calc.setExpression({ id: 'ptinsp', latex: '(d_0, N(d_0))', label: 'N(d₀)', showLabel: true, color: Desmos.Colors.RED, pointStyle: Desmos.Styles.POINT });
+})();
+
+// ── Section 4: Token Cost Explorer ──────────────────────────────────
+(function () {
+  var elt = document.getElementById('graph-explorer');
+  var calc = Desmos.GraphingCalculator(elt, {
+    expressions: true,
+    settingsMenu: false,
+    zoomButtons: true,
+    keypad: false
+  });
+
+  calc.setMathBounds({ left: -10, right: 160, bottom: -0.1, top: 1.2 });
+
+  calc.setExpression({ id: 'f', latex: 'f = 100', sliderBounds: { min: '10', max: '500', step: '1' } });
+  calc.setExpression({ id: 'qy', latex: 'q_y = 30', sliderBounds: { min: '0', max: '200', step: '1' } });
+  calc.setExpression({ id: 'qn', latex: 'q_n = 10', sliderBounds: { min: '0', max: '200', step: '1' } });
+  calc.setExpression({ id: 'D', latex: 'D = 40', sliderBounds: { min: '1', max: '150', step: '1' } });
+  calc.setExpression({ id: 'b', latex: 'b = f / \\ln(2)' });
+
+  // Marginal price curve
+  calc.setExpression({ id: 'marg', latex: 'M(x) = \\frac{1}{1 + e^{-(q_y + x - q_n)/b}}', color: Desmos.Colors.BLUE });
+
+  // Shaded area under marginal price 0 → D
+  calc.setExpression({ id: 'shade', latex: '0 \\le y \\le M(x) \\{0 \\le x \\le D\\}', color: Desmos.Colors.BLUE, fillOpacity: 0.15 });
+
+  // Net cost curve
+  calc.setExpression({ id: 'Cfn', latex: 'C(a, c) = b \\cdot \\ln(e^{a/b} + e^{c/b})' });
+  calc.setExpression({ id: 'netcost', latex: 'N(x) = C(q_y + x, q_n) - C(q_y, q_n)', color: Desmos.Colors.RED });
+
+  // Pre-trade price point
+  calc.setExpression({ id: 'ptpre', latex: '(0, M(0))', label: 'pre-trade', showLabel: true, color: Desmos.Colors.GREEN, pointStyle: Desmos.Styles.POINT });
+  // Post-trade price point
+  calc.setExpression({ id: 'ptpost', latex: '(D, M(D))', label: 'post-trade', showLabel: true, color: Desmos.Colors.PURPLE, pointStyle: Desmos.Styles.POINT });
+  // Average price line (dashed)
+  calc.setExpression({ id: 'avgline', latex: 'y = N(D) / D \\{0 \\le x \\le D\\}', lineStyle: Desmos.Styles.DASHED, color: Desmos.Colors.ORANGE });
+})();
+
+// ── Section 5: Interactive Trade Calculator ─────────────────────────
+var side = 'YES';
+
+function setSide(s) {
+  side = s;
+  document.getElementById('btn-yes').classList.toggle('active', s === 'YES');
+  document.getElementById('btn-no').classList.toggle('active', s === 'NO');
+  recalc();
+}
+
+function fmt(v, digits) {
+  if (digits === undefined) digits = 4;
+  return Number(v).toFixed(digits);
+}
+
+function recalc() {
+  var funding = parseFloat(document.getElementById('in-funding').value) || 100;
+  var qy = parseFloat(document.getElementById('in-qy').value) || 0;
+  var qn = parseFloat(document.getElementById('in-qn').value) || 0;
+  var delta = parseFloat(document.getElementById('in-delta').value) || 0;
+
+  var b = funding / Math.LN2;
+
+  // Pre-trade prices
+  var preYes = marginalYes(qy, qn, b);
+  var preNo = 1 - preYes;
+
+  // Post-trade quantities
+  var postQy = side === 'YES' ? qy + delta : qy;
+  var postQn = side === 'NO' ? qn + delta : qn;
+
+  // Post-trade prices
+  var postYes = marginalYes(postQy, postQn, b);
+  var postNo = 1 - postYes;
+
+  // Net cost
+  var nc = costFn(postQy, postQn, b) - costFn(qy, qn, b);
+
+  // Avg price & slippage
+  var avg = delta > 0 ? nc / delta : 0;
+  var prePrice = side === 'YES' ? preYes : preNo;
+  var slipAbs = avg - prePrice;
+  var slipPct = prePrice > 0 ? (slipAbs / prePrice) * 100 : 0;
+
+  // Price impact = post price - pre price (on the traded side)
+  var postPrice = side === 'YES' ? postYes : postNo;
+  var impact = postPrice - prePrice;
+
+  document.getElementById('out-b').textContent = fmt(b, 2);
+  document.getElementById('out-pre-yes').textContent = fmt(preYes);
+  document.getElementById('out-pre-no').textContent = fmt(preNo);
+  document.getElementById('out-post-yes').textContent = fmt(postYes);
+  document.getElementById('out-post-no').textContent = fmt(postNo);
+  document.getElementById('out-netcost').textContent = fmt(nc, 2);
+  document.getElementById('out-avg').textContent = fmt(avg);
+  document.getElementById('out-slip-abs').textContent = fmt(slipAbs);
+  document.getElementById('out-slip-pct').textContent = fmt(slipPct, 2) + '%';
+  document.getElementById('out-impact').textContent = fmt(impact);
+}
+
+// Wire up live updates
+document.querySelectorAll('.calc-inputs input').forEach(function (el) {
+  el.addEventListener('input', recalc);
+});
+
+// Initial calculation
+recalc();
+</script>
+</body>
+</html>

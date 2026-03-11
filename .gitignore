@@ -14,5 +14,8 @@ docs/
 # Dotenv file
 .env
 
+# Deployments
+deployments/
+
 # Node modules
 node_modules/

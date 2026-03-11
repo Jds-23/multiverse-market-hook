@@ -22,7 +22,7 @@ contract ResolveScript is BaseScript {
         console.log("Resolving market:", conditionStr);
         console.log("Winner:", winnerSide, winner);
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
         ConditionalMarkets(factory).resolve(conditionId, winner);
         vm.stopBroadcast();
 

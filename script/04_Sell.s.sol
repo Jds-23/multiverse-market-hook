@@ -35,7 +35,7 @@ contract SellScript is BaseScript {
         console.log("Selling", side, "tokens");
         console.log("Amount in:", amountIn);
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
 
         _approveRouter(IERC20(outcomeToken));
 

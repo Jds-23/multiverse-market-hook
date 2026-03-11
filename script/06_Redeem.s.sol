@@ -25,7 +25,7 @@ contract RedeemScript is BaseScript {
 
         console.log("Redeeming", balance, "winning tokens");
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
 
         IERC20(winner).approve(factory, balance);
         ConditionalMarkets(factory).redeem(winner, balance);

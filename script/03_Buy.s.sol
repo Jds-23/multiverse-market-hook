@@ -34,7 +34,7 @@ contract BuyScript is BaseScript {
         console.log("Buying", side, "tokens");
         console.log("Amount in:", amountIn);
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
 
         _approveRouter(IERC20(collateral));
 

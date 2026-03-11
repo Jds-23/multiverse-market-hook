@@ -12,7 +12,7 @@ contract DeployCollateralScript is BaseScript {
         string memory symbol = _envOr("COLLATERAL_SYMBOL", string("TUSD"));
         uint256 mintAmount = _envOr("COLLATERAL_MINT_AMOUNT", uint256(1_000_000e6));
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
         SimpleERC20 collateral = new SimpleERC20(name, symbol);
         collateral.mint(deployerAddress, mintAmount);
         vm.stopBroadcast();

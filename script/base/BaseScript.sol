@@ -9,20 +9,31 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
 
 import {IUniswapV4Router04} from "hookmate/interfaces/router/IUniswapV4Router04.sol";
+import {AddressConstants} from "hookmate/constants/AddressConstants.sol";
 
 import {Deployers} from "test/utils/Deployers.sol";
 
 /// @notice Shared base for deployment scripts. Handles env, JSON artifacts, V4 infra.
 contract BaseScript is Script, Deployers {
-    address immutable deployerAddress;
+    uint256 internal deployerPrivateKey;
+    address internal deployerAddress;
     string deploymentPath;
 
     constructor() {
-        deployArtifacts();
-        deployerAddress = _getDeployer();
+        if (block.chainid == 31337) {
+            deployArtifacts();
+        } else {
+            permit2 = IPermit2(AddressConstants.getPermit2Address());
+            poolManager = IPoolManager(AddressConstants.getPoolManagerAddress(block.chainid));
+            positionManager = IPositionManager(AddressConstants.getPositionManagerAddress(block.chainid));
+            swapRouter = IUniswapV4Router04(payable(AddressConstants.getV4SwapRouterAddress(block.chainid)));
+        }
+        deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        deployerAddress = vm.addr(deployerPrivateKey);
         deploymentPath = vm.envOr("DEPLOYMENT_FILE", string("deployments/deployment.json"));
     }
 
@@ -32,11 +43,6 @@ contract BaseScript is Script, Deployers {
         } else {
             revert("Unsupported etch on this network");
         }
-    }
-
-    function _getDeployer() internal returns (address) {
-        address[] memory wallets = vm.getWallets();
-        return wallets.length > 0 ? wallets[0] : msg.sender;
     }
 
     // ── JSON Helpers ─────────────────────────────────────────────────────

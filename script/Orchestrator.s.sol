@@ -25,7 +25,7 @@ contract OrchestratorScript is BaseScript {
         address factory;
         address hook;
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
 
         if (runPhase0) {
             collateral = _deployCollateral();

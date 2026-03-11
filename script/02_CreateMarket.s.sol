@@ -24,7 +24,7 @@ contract CreateMarketScript is BaseScript {
 
         console.log("Creating market for condition:", conditionStr);
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
         IERC20(collateral).approve(factory, fundingAmount);
         ConditionalMarkets(factory).createMarket(conditionId, collateral, fundingAmount);
         vm.stopBroadcast();

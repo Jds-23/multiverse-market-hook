@@ -23,7 +23,7 @@ contract DeployCoreScript is BaseScript {
                 | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
         );
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
 
         // Deploy ConditionalMarkets
         ConditionalMarkets conditionalMarkets = new ConditionalMarkets(poolManager);

@@ -2,7 +2,8 @@
 pragma solidity ^0.8.13;
 
 import {Test} from "forge-std/Test.sol";
-import {ConditionalMarkets, OutcomeToken} from "../src/ConditionalMarkets.sol";
+import {ConditionalMarkets} from "../src/ConditionalMarkets.sol";
+import {OutcomeToken} from "../src/OutcomeToken.sol";
 import {SimpleERC20} from "../src/SimpleERC20.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 

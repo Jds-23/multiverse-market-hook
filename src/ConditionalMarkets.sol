@@ -4,6 +4,12 @@ pragma solidity ^0.8.13;
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {OutcomeToken} from "./OutcomeToken.sol";
+import {IMarketHook} from "./IMarketHook.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Factory + escrow for binary outcome prediction markets.
 /// Deploys YES/NO tokens per condition, handles split/merge/redeem lifecycle.
@@ -15,6 +21,11 @@ contract ConditionalMarkets {
         address yesToken;
         address noToken;
     }
+
+    IPoolManager public immutable poolManager;
+
+    IMarketHook public hook;
+    bool public hookSet;
 
     mapping(bytes32 => Condition) public conditions;
     mapping(bytes32 => mapping(address => uint256)) public collateralBalances;
@@ -32,6 +43,8 @@ contract ConditionalMarkets {
     error UnknownToken(address token);
     error ZeroAmount();
     error InsufficientBalance(address token, uint256 requested, uint256 available);
+    error HookAlreadySet();
+    error HookNotSet();
 
     // ── Events ──────────────────────────────────────────────────────────
 
@@ -52,20 +65,31 @@ contract ConditionalMarkets {
         _;
     }
 
+    // ── Constructor ─────────────────────────────────────────────────────
+
+    constructor(IPoolManager _poolManager) {
+        poolManager = _poolManager;
+    }
+
     // ── External Functions ──────────────────────────────────────────────
 
-    function createCondition(bytes32 conditionId, address collateralToken) external {
+    function setHook(IMarketHook _hook) external {
+        if (hookSet) revert HookAlreadySet();
+        hook = _hook;
+        hookSet = true;
+    }
+
+    function createMarket(bytes32 conditionId, address collateralToken, uint256 amount) external {
+        if (!hookSet) revert HookNotSet();
         if (conditionId == bytes32(0)) revert InvalidConditionId();
         if (conditions[conditionId].collateralToken != address(0)) {
             revert ConditionAlreadyExists(conditionId);
         }
 
+        // Deploy YES/NO tokens
         string memory hexId = _bytes32ToHexString(conditionId);
-
-        OutcomeToken yesToken =
-            new OutcomeToken(string.concat("YES-", hexId), "YES");
-        OutcomeToken noToken =
-            new OutcomeToken(string.concat("NO-", hexId), "NO");
+        OutcomeToken yesToken = new OutcomeToken(string.concat("YES-", hexId), "YES");
+        OutcomeToken noToken = new OutcomeToken(string.concat("NO-", hexId), "NO");
 
         conditions[conditionId] = Condition({
             collateralToken: collateralToken,
@@ -77,6 +101,18 @@ contract ConditionalMarkets {
         tokenCondition[address(noToken)] = conditionId;
 
         emit ConditionCreated(conditionId, collateralToken, address(yesToken), address(noToken));
+
+        // Transfer collateral from caller to hook
+        SafeTransferLib.safeTransferFrom(collateralToken, msg.sender, address(hook), amount);
+
+        // Callback: hook splits collateral into YES/NO
+        hook.onCreateMarket(conditionId, collateralToken, address(yesToken), address(noToken), amount);
+
+        // Initialize 3 pools
+        uint160 sqrtPrice1_1 = TickMath.getSqrtPriceAtTick(0);
+        poolManager.initialize(_makePoolKey(Currency.wrap(collateralToken), Currency.wrap(address(yesToken))), sqrtPrice1_1);
+        poolManager.initialize(_makePoolKey(Currency.wrap(collateralToken), Currency.wrap(address(noToken))), sqrtPrice1_1);
+        poolManager.initialize(_makePoolKey(Currency.wrap(address(yesToken)), Currency.wrap(address(noToken))), sqrtPrice1_1);
     }
 
     function split(bytes32 conditionId, uint256 amount) external notResolved(conditionId) {
@@ -137,6 +173,11 @@ contract ConditionalMarkets {
     }
 
     // ── Internal Helpers ────────────────────────────────────────────────
+
+    function _makePoolKey(Currency a, Currency b) internal view returns (PoolKey memory) {
+        (Currency c0, Currency c1) = a < b ? (a, b) : (b, a);
+        return PoolKey(c0, c1, 0, 60, IHooks(address(hook)));
+    }
 
     function _bytes32ToHexString(bytes32 value) internal pure returns (string memory) {
         bytes memory alphabet = "0123456789abcdef";

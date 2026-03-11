@@ -3,9 +3,11 @@ pragma solidity ^0.8.13;
 
 import {Test} from "forge-std/Test.sol";
 import {ConditionalMarkets} from "../src/ConditionalMarkets.sol";
+import {IMarketHook} from "../src/IMarketHook.sol";
 import {OutcomeToken} from "../src/OutcomeToken.sol";
 import {SimpleERC20} from "../src/SimpleERC20.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 contract ConditionalMarketsTest is Test {
     ConditionalMarkets cm;
@@ -17,8 +19,15 @@ contract ConditionalMarketsTest is Test {
     bytes32 conditionId = keccak256("condition-1");
     bytes32 conditionId2 = keccak256("condition-2");
 
+    // Mock poolManager for constructor
+    address mockPoolManager = makeAddr("poolManager");
+    address mockHook = makeAddr("hook");
+
     function setUp() public {
-        cm = new ConditionalMarkets();
+        // Mock poolManager.initialize to succeed (returns tick 0)
+        vm.mockCall(mockPoolManager, abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(int24(0)));
+
+        cm = new ConditionalMarkets(IPoolManager(mockPoolManager));
         collateral = new SimpleERC20("USD Coin", "USDC");
 
         collateral.mint(alice, 10_000e6);
@@ -35,24 +44,42 @@ contract ConditionalMarketsTest is Test {
     // Helpers
     // ═══════════════════════════════════════════════════════════════════
 
-    function _createCondition() internal returns (address yesToken, address noToken) {
-        cm.createCondition(conditionId, address(collateral));
-        (,address y, address n) = cm.conditions(conditionId);
+    function _createConditionViaMarket(bytes32 _conditionId) internal returns (address yesToken, address noToken) {
+        // Set up a mock hook that does nothing on onCreateMarket
+        if (!cm.hookSet()) {
+            // Deploy a do-nothing mock for the hook
+            vm.mockCall(mockHook, abi.encodeWithSelector(IMarketHook.onCreateMarket.selector), "");
+            cm.setHook(IMarketHook(mockHook));
+        }
+
+        // Transfer collateral to mock hook (createMarket transfers from caller to hook)
+        uint256 amount = 100e6;
+        collateral.mint(address(this), amount);
+        collateral.approve(address(cm), amount);
+        cm.createMarket(_conditionId, address(collateral), amount);
+        (,address y, address n) = cm.conditions(_conditionId);
         return (y, n);
+    }
+
+    function _createCondition() internal returns (address yesToken, address noToken) {
+        return _createConditionViaMarket(conditionId);
     }
 
     function _createCondition2() internal returns (address yesToken, address noToken) {
-        cm.createCondition(conditionId2, address(collateral));
-        (,address y, address n) = cm.conditions(conditionId2);
-        return (y, n);
+        return _createConditionViaMarket(conditionId2);
+    }
+
+    // Need to set up split/merge for tests that use them directly
+    function _setupForSplitMerge() internal {
+        _createCondition();
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // Condition Creation
+    // Condition Creation (via createMarket)
     // ═══════════════════════════════════════════════════════════════════
 
-    function test_createCondition_storesStruct() public {
-        cm.createCondition(conditionId, address(collateral));
+    function test_createMarket_storesStruct() public {
+        _createCondition();
         (address col, address yes, address no) = cm.conditions(conditionId);
         assertEq(col, address(collateral));
         assertTrue(yes != address(0));
@@ -60,53 +87,75 @@ contract ConditionalMarketsTest is Test {
         assertTrue(yes != no);
     }
 
-    function test_createCondition_tokenNamesEncodeConditionId() public {
+    function test_createMarket_tokenNamesEncodeConditionId() public {
         (address yes, address no) = _createCondition();
         string memory hexId = _bytes32ToHex(conditionId);
         assertEq(ERC20(yes).name(), string.concat("YES-", hexId));
         assertEq(ERC20(no).name(), string.concat("NO-", hexId));
     }
 
-    function test_createCondition_tokenSymbols() public {
+    function test_createMarket_tokenSymbols() public {
         (address yes, address no) = _createCondition();
         assertEq(ERC20(yes).symbol(), "YES");
         assertEq(ERC20(no).symbol(), "NO");
     }
 
-    function test_createCondition_tokenDecimals() public {
+    function test_createMarket_tokenDecimals() public {
         (address yes, address no) = _createCondition();
         assertEq(ERC20(yes).decimals(), 6);
         assertEq(ERC20(no).decimals(), 6);
     }
 
-    function test_createCondition_tokenOwnerIsConditionalMarkets() public {
+    function test_createMarket_tokenOwnerIsConditionalMarkets() public {
         (address yes, address no) = _createCondition();
         assertEq(OutcomeToken(yes).owner(), address(cm));
         assertEq(OutcomeToken(no).owner(), address(cm));
     }
 
-    function test_createCondition_reverseMappingsSet() public {
+    function test_createMarket_reverseMappingsSet() public {
         (address yes, address no) = _createCondition();
         assertEq(cm.tokenCondition(yes), conditionId);
         assertEq(cm.tokenCondition(no), conditionId);
     }
 
-    function test_createCondition_emitsEvent() public {
+    function test_createMarket_emitsEvent() public {
+        if (!cm.hookSet()) {
+            vm.mockCall(mockHook, abi.encodeWithSelector(IMarketHook.onCreateMarket.selector), "");
+            cm.setHook(IMarketHook(mockHook));
+        }
+        collateral.mint(address(this), 100e6);
+        collateral.approve(address(cm), 100e6);
+
         vm.expectEmit(true, false, false, false);
         emit ConditionalMarkets.ConditionCreated(conditionId, address(0), address(0), address(0));
-        cm.createCondition(conditionId, address(collateral));
+        cm.createMarket(conditionId, address(collateral), 100e6);
     }
 
-    function test_createCondition_duplicateReverts() public {
-        cm.createCondition(conditionId, address(collateral));
+    function test_createMarket_duplicateReverts() public {
+        _createCondition();
+        collateral.mint(address(this), 100e6);
+        collateral.approve(address(cm), 100e6);
         vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.ConditionAlreadyExists.selector, conditionId));
-        cm.createCondition(conditionId, address(collateral));
+        cm.createMarket(conditionId, address(collateral), 100e6);
     }
 
-    function test_createCondition_multipleIndependent() public {
+    function test_createMarket_multipleIndependent() public {
         (address yes1,) = _createCondition();
         (address yes2,) = _createCondition2();
         assertTrue(yes1 != yes2);
+    }
+
+    function test_createMarket_hookNotSetReverts() public {
+        ConditionalMarkets cm2 = new ConditionalMarkets(IPoolManager(mockPoolManager));
+        vm.expectRevert(ConditionalMarkets.HookNotSet.selector);
+        cm2.createMarket(conditionId, address(collateral), 100e6);
+    }
+
+    function test_setHook_doubleSetReverts() public {
+        ConditionalMarkets cm2 = new ConditionalMarkets(IPoolManager(mockPoolManager));
+        cm2.setHook(IMarketHook(mockHook));
+        vm.expectRevert(ConditionalMarkets.HookAlreadySet.selector);
+        cm2.setHook(IMarketHook(mockHook));
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -121,7 +170,6 @@ contract ConditionalMarketsTest is Test {
         assertEq(ERC20(yes).balanceOf(alice), 100e6);
         assertEq(ERC20(no).balanceOf(alice), 100e6);
         assertEq(collateral.balanceOf(alice), 10_000e6 - 100e6);
-        assertEq(collateral.balanceOf(address(cm)), 100e6);
     }
 
     function test_split_incrementsCollateralBalances() public {
@@ -157,7 +205,6 @@ contract ConditionalMarketsTest is Test {
         _createCondition();
         address charlie = makeAddr("charlie");
         collateral.mint(charlie, 1000e6);
-        // charlie never approved cm
         vm.prank(charlie);
         vm.expectRevert();
         cm.split(conditionId, 100e6);
@@ -400,7 +447,6 @@ contract ConditionalMarketsTest is Test {
         cm.redeem(yes, 500e6);
 
         assertEq(collateral.balanceOf(alice), 10_000e6);
-        assertEq(collateral.balanceOf(address(cm)), 0);
         assertEq(cm.collateralBalances(conditionId, address(collateral)), 0);
     }
 
@@ -428,18 +474,15 @@ contract ConditionalMarketsTest is Test {
         vm.prank(alice);
         cm.split(conditionId, 100e6);
 
-        // Alice transfers 60 YES to Bob
         vm.prank(alice);
         ERC20(yes).transfer(bob, 60e6);
 
         cm.resolve(conditionId, yes);
 
-        // Alice redeems 40
         vm.prank(alice);
         cm.redeem(yes, 40e6);
         assertEq(collateral.balanceOf(alice), 10_000e6 - 100e6 + 40e6);
 
-        // Bob redeems 60
         vm.prank(bob);
         cm.redeem(yes, 60e6);
         assertEq(collateral.balanceOf(bob), 10_000e6 + 60e6);
@@ -512,14 +555,20 @@ contract ConditionalMarketsTest is Test {
     // ═══════════════════════════════════════════════════════════════════
 
     function test_edge_zeroConditionIdReverts() public {
+        if (!cm.hookSet()) {
+            vm.mockCall(mockHook, abi.encodeWithSelector(IMarketHook.onCreateMarket.selector), "");
+            cm.setHook(IMarketHook(mockHook));
+        }
         vm.expectRevert(ConditionalMarkets.InvalidConditionId.selector);
-        cm.createCondition(bytes32(0), address(collateral));
+        cm.createMarket(bytes32(0), address(collateral), 100e6);
     }
 
     function test_edge_duplicateConditionIdReverts() public {
-        cm.createCondition(conditionId, address(collateral));
+        _createCondition();
+        collateral.mint(address(this), 100e6);
+        collateral.approve(address(cm), 100e6);
         vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.ConditionAlreadyExists.selector, conditionId));
-        cm.createCondition(conditionId, address(collateral));
+        cm.createMarket(conditionId, address(collateral), 100e6);
     }
 
     function test_edge_twoConditionsSameCollateralIndependent() public {

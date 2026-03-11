@@ -10,43 +10,40 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {ConditionalMarkets} from "./ConditionalMarkets.sol";
 import {LMSRMath} from "./LMSRMath.sol";
+import {IMarketHook} from "./IMarketHook.sol";
 
-contract ConditionalLMSRMarketHook is BaseHook {
+contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
     error NotImplementedYet();
     error UnknownToken();
     error MarketResolved();
     error InsufficientLiquidity();
-
     error CrossOutcomeSwapsNotSupportedYet();
     error TokenNotWinner();
+    error OnlyConditionalMarket();
+    error MarketAlreadyExists();
 
     uint8 internal constant DECIMALS = 6;
 
-    Currency public immutable collateralToken;
-    Currency public immutable yesToken;
-    Currency public immutable noToken;
-    ConditionalMarkets public immutable conditionalMarket;
-    bytes32 public immutable conditionId;
+    struct MarketState {
+        Currency collateralToken;
+        Currency yesToken;
+        Currency noToken;
+        uint256 funding;
+        uint256 reserveYes;
+        uint256 reserveNo;
+        uint256 reserveCollateral;
+    }
 
-    mapping(Currency => uint256) public reserves;
-    bool public initialized;
-    uint256 public funding;
+    ConditionalMarkets public immutable conditionalMarket;
+
+    mapping(bytes32 => MarketState) public markets;
+    mapping(address => bytes32) public tokenToCondition;
 
     constructor(
         IPoolManager _poolManager,
-        Currency _collateralToken,
-        Currency _yesToken,
-        Currency _noToken,
-        ConditionalMarkets _conditionalMarket,
-        bytes32 _conditionId,
-        uint256 _funding
+        ConditionalMarkets _conditionalMarket
     ) BaseHook(_poolManager) {
-        collateralToken = _collateralToken;
-        yesToken = _yesToken;
-        noToken = _noToken;
         conditionalMarket = _conditionalMarket;
-        conditionId = _conditionId;
-        funding = _funding;
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -68,6 +65,33 @@ contract ConditionalLMSRMarketHook is BaseHook {
         });
     }
 
+    function onCreateMarket(
+        bytes32 conditionId,
+        address collateral,
+        address yesToken,
+        address noToken,
+        uint256 amount
+    ) external override {
+        if (msg.sender != address(conditionalMarket)) revert OnlyConditionalMarket();
+        if (Currency.unwrap(markets[conditionId].collateralToken) != address(0)) revert MarketAlreadyExists();
+
+        markets[conditionId] = MarketState({
+            collateralToken: Currency.wrap(collateral),
+            yesToken: Currency.wrap(yesToken),
+            noToken: Currency.wrap(noToken),
+            funding: amount,
+            reserveYes: amount,
+            reserveNo: amount,
+            reserveCollateral: amount
+        });
+
+        tokenToCondition[yesToken] = conditionId;
+        tokenToCondition[noToken] = conditionId;
+
+        SafeTransferLib.safeApprove(collateral, address(conditionalMarket), amount);
+        conditionalMarket.split(conditionId, amount);
+    }
+
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
         internal
         override
@@ -76,30 +100,45 @@ contract ConditionalLMSRMarketHook is BaseHook {
         Currency tokenIn = params.zeroForOne ? key.currency0 : key.currency1;
         Currency tokenOut = params.zeroForOne ? key.currency1 : key.currency0;
 
-        bool isBuy = _currenciesEqual(tokenIn, collateralToken) && _isOutcomeToken(tokenOut);
-        bool isSell = _isOutcomeToken(tokenIn) && _currenciesEqual(tokenOut, collateralToken);
+        bytes32 cid = _resolveCondition(tokenIn, tokenOut);
 
-        if (!isBuy && !isSell) {
-            // here implementation of this condition will go
-            revert CrossOutcomeSwapsNotSupportedYet();
-        }
-
-        if (isBuy) {
-            if (conditionalMarket.resolved(conditionId) != address(0)) revert MarketResolved();
-            return _executeBuy(tokenIn, tokenOut, params);
-        } else {
-            address winner = conditionalMarket.resolved(conditionId);
-            if (winner == address(0)) {
-                return _executeSell(tokenIn, tokenOut, params);
-            } else {
-                if (winner != Currency.unwrap(tokenIn)) revert TokenNotWinner();
-                return _executeRedeem(tokenIn, tokenOut, params);
-            }
-        }
+        uint8 action = _classifySwap(cid, tokenIn, tokenOut);
+        if (action == 1) return _executeBuy(cid, tokenIn, tokenOut, params);
+        if (action == 2) return _executeSell(cid, tokenIn, tokenOut, params);
+        if (action == 3) return _executeRedeem(cid, tokenIn, tokenOut, params);
+        revert CrossOutcomeSwapsNotSupportedYet(); // unreachable if _classifySwap is correct
     }
 
-    function _isOutcomeToken(Currency token) internal view returns (bool) {
-        return _currenciesEqual(token, yesToken) || _currenciesEqual(token, noToken);
+    /// @dev Returns 1=buy, 2=sell, 3=redeem. Reverts on invalid.
+    function _classifySwap(bytes32 cid, Currency tokenIn, Currency tokenOut) internal view returns (uint8) {
+        MarketState storage state = markets[cid];
+
+        bool isBuy = _currenciesEqual(tokenIn, state.collateralToken) && _isOutcomeToken(state, tokenOut);
+        bool isSell = _isOutcomeToken(state, tokenIn) && _currenciesEqual(tokenOut, state.collateralToken);
+
+        if (!isBuy && !isSell) revert CrossOutcomeSwapsNotSupportedYet();
+
+        if (isBuy) {
+            if (conditionalMarket.resolved(cid) != address(0)) revert MarketResolved();
+            return 1;
+        }
+
+        address winner = conditionalMarket.resolved(cid);
+        if (winner == address(0)) return 2;
+        if (winner != Currency.unwrap(tokenIn)) revert TokenNotWinner();
+        return 3;
+    }
+
+    function _resolveCondition(Currency tokenIn, Currency tokenOut) internal view returns (bytes32) {
+        bytes32 cid = tokenToCondition[Currency.unwrap(tokenIn)];
+        if (cid != bytes32(0)) return cid;
+        cid = tokenToCondition[Currency.unwrap(tokenOut)];
+        if (cid != bytes32(0)) return cid;
+        revert UnknownToken();
+    }
+
+    function _isOutcomeToken(MarketState storage state, Currency token) internal view returns (bool) {
+        return _currenciesEqual(token, state.yesToken) || _currenciesEqual(token, state.noToken);
     }
 
     function _currenciesEqual(Currency a, Currency b) internal pure returns (bool) {
@@ -124,49 +163,36 @@ contract ConditionalLMSRMarketHook is BaseHook {
         revert NotImplementedYet();
     }
 
-    function initializeReserves(uint256 amount) external {
-        SafeTransferLib.safeTransferFrom(
-            Currency.unwrap(collateralToken), msg.sender, address(this), amount
-        );
-        SafeTransferLib.safeApprove(
-            Currency.unwrap(collateralToken), address(conditionalMarket), amount
-        );
-        conditionalMarket.split(conditionId, amount);
-        reserves[collateralToken] = amount;
-        reserves[yesToken] = amount;
-        reserves[noToken] = amount;
-        initialized = true;
-    }
-
-    function calcMarginalPrice(Currency token) public view returns (uint256) {
+    function calcMarginalPrice(bytes32 conditionId, Currency token) public view returns (uint256) {
+        MarketState storage state = markets[conditionId];
         uint256 yesPrice = LMSRMath.calcMarginalPriceBinary(
-            reserves[yesToken], reserves[noToken], funding, 6
+            state.reserveYes, state.reserveNo, state.funding, 6
         );
-        if (Currency.unwrap(token) == Currency.unwrap(yesToken)) {
+        if (Currency.unwrap(token) == Currency.unwrap(state.yesToken)) {
             return yesPrice;
-        } else if (Currency.unwrap(token) == Currency.unwrap(noToken)) {
+        } else if (Currency.unwrap(token) == Currency.unwrap(state.noToken)) {
             return 1e18 - yesPrice;
         }
         revert UnknownToken();
     }
 
-    function _executeBuy(Currency tokenIn, Currency tokenOut, SwapParams calldata params)
+    function _executeBuy(bytes32 cid, Currency tokenIn, Currency tokenOut, SwapParams calldata params)
         private
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        MarketState storage state = markets[cid];
         uint256 cost;
         uint256 delta;
 
         if (params.amountSpecified > 0) {
-            // Exact-output: user specifies tokens wanted
             delta = uint256(params.amountSpecified);
 
             uint256[] memory quantities = new uint256[](2);
-            quantities[0] = reserves[yesToken];
-            quantities[1] = reserves[noToken];
+            quantities[0] = state.reserveYes;
+            quantities[1] = state.reserveNo;
 
             int256[] memory amounts = new int256[](2);
-            if (_currenciesEqual(tokenOut, yesToken)) {
+            if (_currenciesEqual(tokenOut, state.yesToken)) {
                 amounts[0] = int256(delta);
                 amounts[1] = 0;
             } else {
@@ -174,13 +200,12 @@ contract ConditionalLMSRMarketHook is BaseHook {
                 amounts[1] = int256(delta);
             }
 
-            cost = uint256(LMSRMath.calcNetCost(quantities, amounts, funding, DECIMALS, true));
+            cost = uint256(LMSRMath.calcNetCost(quantities, amounts, state.funding, DECIMALS, true));
         } else {
-            // Exact-input: user specifies collateral to spend
             cost = uint256(-params.amountSpecified);
-            uint256 outcomeIndex = _currenciesEqual(tokenOut, yesToken) ? 0 : 1;
+            uint256 outcomeIndex = _currenciesEqual(tokenOut, state.yesToken) ? 0 : 1;
             delta = LMSRMath.calcTradeAmountBinary(
-                reserves[yesToken], reserves[noToken], int256(cost), outcomeIndex, funding, DECIMALS
+                state.reserveYes, state.reserveNo, int256(cost), outcomeIndex, state.funding, DECIMALS
             );
         }
 
@@ -188,48 +213,50 @@ contract ConditionalLMSRMarketHook is BaseHook {
 
         poolManager.take(tokenIn, address(this), cost);
         SafeTransferLib.safeApprove(
-            Currency.unwrap(collateralToken), address(conditionalMarket), cost
+            Currency.unwrap(state.collateralToken), address(conditionalMarket), cost
         );
-        conditionalMarket.split(conditionId, cost);
+        conditionalMarket.split(cid, cost);
 
-        // Provide outcome tokens to poolManager for the swapper
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), delta);
         poolManager.settle();
 
-        // Update reserves (track cumulative positions)
-        reserves[tokenOut] += cost;
-        reserves[tokenOut] -= delta;
-        reserves[collateralToken] += cost;
-        reserves[_currenciesEqual(tokenOut, yesToken) ? noToken : yesToken] += cost;
+        // Update reserves
+        if (_currenciesEqual(tokenOut, state.yesToken)) {
+            state.reserveYes += cost;
+            state.reserveYes -= delta;
+            state.reserveNo += cost;
+        } else {
+            state.reserveNo += cost;
+            state.reserveNo -= delta;
+            state.reserveYes += cost;
+        }
+        state.reserveCollateral += cost;
 
-        // BeforeSwapDelta: (specifiedDelta, unspecifiedDelta)
         if (params.amountSpecified > 0) {
-            // Exact-output: specified=output(-delta), unspecified=input(+cost)
             return (this.beforeSwap.selector, toBeforeSwapDelta(-int128(int256(delta)), int128(int256(cost))), 0);
         } else {
-            // Exact-input: specified=input(+cost), unspecified=output(-delta)
             return (this.beforeSwap.selector, toBeforeSwapDelta(int128(int256(cost)), -int128(int256(delta))), 0);
         }
     }
 
-    function _executeSell(Currency tokenIn, Currency tokenOut, SwapParams calldata params)
+    function _executeSell(bytes32 cid, Currency tokenIn, Currency tokenOut, SwapParams calldata params)
         private
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        MarketState storage state = markets[cid];
         uint256 tokensIn;
         uint256 collateralOut;
 
         if (params.amountSpecified < 0) {
-            // Exact-input: user specifies tokens to sell
             tokensIn = uint256(-params.amountSpecified);
 
             uint256[] memory quantities = new uint256[](2);
-            quantities[0] = reserves[yesToken];
-            quantities[1] = reserves[noToken];
+            quantities[0] = state.reserveYes;
+            quantities[1] = state.reserveNo;
 
             int256[] memory amounts = new int256[](2);
-            if (_currenciesEqual(tokenIn, yesToken)) {
+            if (_currenciesEqual(tokenIn, state.yesToken)) {
                 amounts[0] = -int256(tokensIn);
                 amounts[1] = 0;
             } else {
@@ -237,53 +264,49 @@ contract ConditionalLMSRMarketHook is BaseHook {
                 amounts[1] = -int256(tokensIn);
             }
 
-            int256 netCost = LMSRMath.calcNetCost(quantities, amounts, funding, DECIMALS, false);
+            int256 netCost = LMSRMath.calcNetCost(quantities, amounts, state.funding, DECIMALS, false);
             if (netCost >= 0) revert InsufficientLiquidity();
             collateralOut = uint256(-netCost);
         } else {
-            // Exact-output: user specifies collateral wanted
             collateralOut = uint256(params.amountSpecified);
-            uint256 outcomeIndex = _currenciesEqual(tokenIn, yesToken) ? 0 : 1;
+            uint256 outcomeIndex = _currenciesEqual(tokenIn, state.yesToken) ? 0 : 1;
             tokensIn = LMSRMath.calcTradeAmountBinary(
-                reserves[yesToken], reserves[noToken], -int256(collateralOut), outcomeIndex, funding, DECIMALS
+                state.reserveYes, state.reserveNo, -int256(collateralOut), outcomeIndex, state.funding, DECIMALS
             );
         }
 
         if (tokensIn == 0 || collateralOut == 0) revert InsufficientLiquidity();
 
-        // Take outcome tokens from PM (user settles to PM in unlockCallback)
         poolManager.take(tokenIn, address(this), tokensIn);
+        conditionalMarket.merge(cid, collateralOut);
 
-        // Merge YES+NO → collateral (burns from hook, no approval needed — OutcomeToken.burn is onlyOwner)
-        // Note: merge burns collateralOut amount of BOTH YES and NO tokens, regardless of which is tokenIn
-        conditionalMarket.merge(conditionId, collateralOut);
-
-        // Send collateral to PM for the swapper to take
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), collateralOut);
         poolManager.settle();
 
-        // Update reserves: collateralOut was burned from both YES and NO (the burn amount is collateralOut)
-        reserves[tokenIn] += tokensIn;
-        reserves[tokenIn] -= collateralOut;
-        reserves[_currenciesEqual(tokenIn, yesToken) ? noToken : yesToken] -= collateralOut;
-        reserves[collateralToken] -= collateralOut;
+        // Update reserves
+        if (_currenciesEqual(tokenIn, state.yesToken)) {
+            state.reserveYes += tokensIn;
+            state.reserveYes -= collateralOut;
+            state.reserveNo -= collateralOut;
+        } else {
+            state.reserveNo += tokensIn;
+            state.reserveNo -= collateralOut;
+            state.reserveYes -= collateralOut;
+        }
+        state.reserveCollateral -= collateralOut;
 
-        // BeforeSwapDelta: (specifiedDelta, unspecifiedDelta)
         if (params.amountSpecified < 0) {
-            // Exact-input: specified=input(+tokensIn), unspecified=output(-collateralOut)
             return (this.beforeSwap.selector, toBeforeSwapDelta(int128(int256(tokensIn)), -int128(int256(collateralOut))), 0);
         } else {
-            // Exact-output: specified=output(-collateralOut), unspecified=input(+tokensIn)
             return (this.beforeSwap.selector, toBeforeSwapDelta(-int128(int256(collateralOut)), int128(int256(tokensIn))), 0);
         }
     }
 
-    function _executeRedeem(Currency tokenIn, Currency tokenOut, SwapParams calldata params)
+    function _executeRedeem(bytes32, Currency tokenIn, Currency tokenOut, SwapParams calldata params)
         private
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        // 1:1 redeem — amount is the same whether specified as input or output
         uint256 amount = params.amountSpecified < 0
             ? uint256(-params.amountSpecified)
             : uint256(params.amountSpecified);
@@ -295,94 +318,10 @@ contract ConditionalLMSRMarketHook is BaseHook {
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), amount);
         poolManager.settle();
 
-        // exact-input: specified=tokenIn(+amount), unspecified=tokenOut(-amount)
-        // exact-output: specified=tokenOut(-amount), unspecified=tokenIn(+amount)
         if (params.amountSpecified < 0) {
             return (this.beforeSwap.selector, toBeforeSwapDelta(int128(int256(amount)), -int128(int256(amount))), 0);
         } else {
             return (this.beforeSwap.selector, toBeforeSwapDelta(-int128(int256(amount)), int128(int256(amount))), 0);
         }
     }
-
-    // compilation error stack too deep
-    // function _executeSwap(Currency tokenIn, Currency tokenOut, SwapParams calldata params)
-    //     private
-    //     returns (bytes4, BeforeSwapDelta, uint24)
-    // {
-    //     bool isBuy = _currenciesEqual(tokenIn, collateralToken);
-
-    //     // Validate amountSpecified sign: buy = exact-output (>0), sell = exact-input (<0)
-    //     if (isBuy && params.amountSpecified <= 0) revert OnlyExactOutputSwaps();
-    //     if (!isBuy && params.amountSpecified >= 0) revert OnlyExactInputSells();
-
-    //     Currency outcomeToken = isBuy ? tokenOut : tokenIn;
-    //     uint256 outcomeDelta = isBuy ? uint256(params.amountSpecified) : uint256(-params.amountSpecified);
-
-    //     // Build LMSR amounts: +delta for buy (adding to pool), -delta for sell (removing from pool)
-    //     uint256[] memory quantities = new uint256[](2);
-    //     quantities[0] = reserves[yesToken];
-    //     quantities[1] = reserves[noToken];
-
-    //     int256 sign = isBuy ? int256(1) : int256(-1);
-    //     int256[] memory amounts = new int256[](2);
-    //     if (_currenciesEqual(outcomeToken, yesToken)) {
-    //         amounts[0] = sign * int256(outcomeDelta);
-    //         amounts[1] = 0;
-    //     } else {
-    //         amounts[0] = 0;
-    //         amounts[1] = sign * int256(outcomeDelta);
-    //     }
-
-    //     int256 netCost = LMSRMath.calcNetCost(quantities, amounts, funding, DECIMALS, isBuy);
-    //     uint256 collateralAmount;
-    //     if (isBuy) {
-    //         if (netCost <= 0) revert InsufficientLiquidity();
-    //         collateralAmount = uint256(netCost);
-    //     } else {
-    //         if (netCost >= 0) revert InsufficientLiquidity();
-    //         collateralAmount = uint256(-netCost);
-    //     }
-
-    //     Currency otherOutcome = _currenciesEqual(outcomeToken, yesToken) ? noToken : yesToken;
-
-    //     if (isBuy) {
-    //         // Take collateral from PM, split into outcome tokens, send requested outcome to PM
-    //         poolManager.take(tokenIn, address(this), collateralAmount);
-    //         SafeTransferLib.safeApprove(
-    //             Currency.unwrap(collateralToken), address(conditionalMarket), collateralAmount
-    //         );
-    //         conditionalMarket.split(conditionId, collateralAmount);
-
-    //         poolManager.sync(tokenOut);
-    //         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), outcomeDelta);
-    //         poolManager.settle();
-
-    //         // Split adds collateralAmount to both outcomes; user takes outcomeDelta of one
-    //         reserves[outcomeToken] += collateralAmount - outcomeDelta;
-    //         reserves[otherOutcome] += collateralAmount;
-    //         reserves[collateralToken] += collateralAmount;
-    //     } else {
-    //         // Take outcome tokens from PM, merge YES+NO into collateral, send collateral to PM
-    //         poolManager.take(tokenIn, address(this), outcomeDelta);
-    //         conditionalMarket.merge(conditionId, collateralAmount);
-
-    //         poolManager.sync(tokenOut);
-    //         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), collateralAmount);
-    //         poolManager.settle();
-
-    //         // User gives outcomeDelta; merge burns collateralAmount from both outcomes
-    //         reserves[outcomeToken] += outcomeDelta - collateralAmount;
-    //         reserves[otherOutcome] -= collateralAmount;
-    //         reserves[collateralToken] -= collateralAmount;
-    //     }
-
-    //     // BeforeSwapDelta: (specifiedDelta, unspecifiedDelta)
-    //     // Buy:  specified=outcomeOut(-delta), unspecified=collateralIn(+cost)
-    //     // Sell: specified=outcomeIn(+delta),  unspecified=collateralOut(-cost)
-    //     int128 specifiedDelta = isBuy ? -int128(int256(outcomeDelta)) : int128(int256(outcomeDelta));
-    //     int128 unspecifiedDelta = isBuy ? int128(int256(collateralAmount)) : -int128(int256(collateralAmount));
-
-    //     return (this.beforeSwap.selector, toBeforeSwapDelta(specifiedDelta, unspecifiedDelta), 0);
-    // }
 }
-

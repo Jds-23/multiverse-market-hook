@@ -64,6 +64,17 @@ contract LMSRMathHarness {
     ) external pure returns (uint256) {
         return LMSRMath.calcTradeAmountBinary(balanceYes, balanceNo, amount, outcomeIndex, funding, decimals);
     }
+
+    function calcTokenSwapBinary(
+        uint256 balanceYes,
+        uint256 balanceNo,
+        uint256 tokensToSell,
+        uint256 sellOutcomeIndex,
+        uint256 funding,
+        uint8 decimals
+    ) external pure returns (uint256) {
+        return LMSRMath.calcTokenSwapBinary(balanceYes, balanceNo, tokensToSell, sellOutcomeIndex, funding, decimals);
+    }
 }
 
 contract LMSRMathTest is Test {
@@ -406,6 +417,87 @@ contract LMSRMathTest is Test {
         } catch {
             // InsufficientLiquidity — valid revert for extreme inputs
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Phase 5c: calcTokenSwapBinary
+    // ═══════════════════════════════════════════════════════════════════
+
+    function test_tokenSwap_roundTrip_sellYes() public view {
+        // Sell 20 YES → get Y NO, then verify net cost ≈ 0
+        uint256 balY = 50e6;
+        uint256 balN = 30e6;
+        uint256 sellAmount = 20e6;
+        uint256 buyAmount = h.calcTokenSwapBinary(balY, balN, sellAmount, 0, FUNDING_100, DEC6);
+        assertGt(buyAmount, 0, "should get NO tokens");
+
+        // Verify: selling sellAmount YES and buying buyAmount NO has net cost ≈ 0
+        int256 cost = h.calcNetCostBinary(balY, balN, -int256(sellAmount), int256(buyAmount), FUNDING_100, DEC6, false);
+        assertApproxEqAbs(cost, 0, 1, "round-trip swap should have zero net cost");
+    }
+
+    function test_tokenSwap_roundTrip_sellNo() public view {
+        // Sell 15 NO → get Y YES
+        uint256 balY = 20e6;
+        uint256 balN = 60e6;
+        uint256 sellAmount = 15e6;
+        uint256 buyAmount = h.calcTokenSwapBinary(balY, balN, sellAmount, 1, FUNDING_100, DEC6);
+        assertGt(buyAmount, 0, "should get YES tokens");
+
+        int256 cost = h.calcNetCostBinary(balY, balN, int256(buyAmount), -int256(sellAmount), FUNDING_100, DEC6, false);
+        assertApproxEqAbs(cost, 0, 1, "round-trip swap should have zero net cost");
+    }
+
+    function test_tokenSwap_symmetricBalances() public view {
+        // Equal balances: selling YES vs NO should yield the same amount of the other token
+        uint256 sellAmount = 10e6;
+        uint256 buyYesToNo = h.calcTokenSwapBinary(0, 0, sellAmount, 0, FUNDING_100, DEC6);
+        uint256 buyNoToYes = h.calcTokenSwapBinary(0, 0, sellAmount, 1, FUNDING_100, DEC6);
+        assertEq(buyYesToNo, buyNoToYes, "symmetric balances -> symmetric swap");
+        // Selling moves price against you, so you always get fewer tokens than you sell
+        assertLt(buyYesToNo, sellAmount, "swap should have slippage");
+    }
+
+    function test_tokenSwap_asymmetric_expensiveGivesFewer() public view {
+        // YES is expensive (low balance) → selling YES should give fewer NO
+        // YES is cheap (high balance) → selling YES should give more NO
+        uint256 sellAmount = 10e6;
+        uint256 buyFromExpensive = h.calcTokenSwapBinary(0, 100e6, sellAmount, 0, FUNDING_100, DEC6);
+        uint256 buyFromCheap = h.calcTokenSwapBinary(100e6, 0, sellAmount, 0, FUNDING_100, DEC6);
+        assertGt(buyFromExpensive, buyFromCheap, "selling expensive token yields more of cheap token");
+    }
+
+    function test_tokenSwap_zeroInput() public view {
+        uint256 result = h.calcTokenSwapBinary(50e6, 30e6, 0, 0, FUNDING_100, DEC6);
+        assertEq(result, 0, "zero sell -> zero buy");
+    }
+
+    function test_tokenSwap_smallAmount() public view {
+        uint256 buyAmount = h.calcTokenSwapBinary(0, 0, 1e4, 0, FUNDING_100, DEC6);
+        // At symmetric balances, should get same amount back
+        assertApproxEqAbs(buyAmount, 1e4, 1, "small swap at symmetric should be ~equal");
+    }
+
+    function test_tokenSwap_revert_InvalidOutcomeIndex() public {
+        vm.expectRevert(LMSRMath.InvalidOutcomeIndex.selector);
+        h.calcTokenSwapBinary(0, 0, 10e6, 2, FUNDING_100, DEC6);
+    }
+
+    function test_tokenSwap_revert_ZeroFunding() public {
+        vm.expectRevert(LMSRMath.ZeroFunding.selector);
+        h.calcTokenSwapBinary(0, 0, 10e6, 0, 0, DEC6);
+    }
+
+    function testFuzz_tokenSwap_roundTrip(uint256 balY, uint256 balN, uint256 sellAmount) public view {
+        balY = bound(balY, 0, 500e6);
+        balN = bound(balN, 0, 500e6);
+        sellAmount = bound(sellAmount, 1e4, 200e6);
+
+        uint256 buyAmount = h.calcTokenSwapBinary(balY, balN, sellAmount, 0, FUNDING_100, DEC6);
+
+        // Verify net cost ≈ 0: sell YES, buy NO
+        int256 cost = h.calcNetCostBinary(balY, balN, -int256(sellAmount), int256(buyAmount), FUNDING_100, DEC6, false);
+        assertApproxEqAbs(cost, 0, 2, "fuzz: swap round-trip should have zero net cost");
     }
 
     // ═══════════════════════════════════════════════════════════════════

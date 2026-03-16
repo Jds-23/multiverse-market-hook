@@ -8,7 +8,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
-import {ConditionalMarkets} from "./ConditionalMarkets.sol";
+import {MultiverseMarkets} from "./MultiverseMarkets.sol";
 import {LMSRMath} from "./LMSRMath.sol";
 import {IMarketHook} from "./IMarketHook.sol";
 
@@ -34,16 +34,16 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         uint256 reserveCollateral;
     }
 
-    ConditionalMarkets public immutable conditionalMarket;
+    MultiverseMarkets public immutable multiverseMarket;
 
     mapping(bytes32 => MarketState) public markets;
-    mapping(address => bytes32) public tokenToCondition;
+    mapping(address => bytes32) public tokenToUniverse;
 
     constructor(
         IPoolManager _poolManager,
-        ConditionalMarkets _conditionalMarket
+        MultiverseMarkets _multiverseMarket
     ) BaseHook(_poolManager) {
-        conditionalMarket = _conditionalMarket;
+        multiverseMarket = _multiverseMarket;
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -66,16 +66,16 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
     }
 
     function onCreateMarket(
-        bytes32 conditionId,
+        bytes32 universeId,
         address collateral,
         address yesToken,
         address noToken,
         uint256 amount
     ) external override {
-        if (msg.sender != address(conditionalMarket)) revert OnlyConditionalMarket();
-        if (Currency.unwrap(markets[conditionId].collateralToken) != address(0)) revert MarketAlreadyExists();
+        if (msg.sender != address(multiverseMarket)) revert OnlyConditionalMarket();
+        if (Currency.unwrap(markets[universeId].collateralToken) != address(0)) revert MarketAlreadyExists();
 
-        markets[conditionId] = MarketState({
+        markets[universeId] = MarketState({
             collateralToken: Currency.wrap(collateral),
             yesToken: Currency.wrap(yesToken),
             noToken: Currency.wrap(noToken),
@@ -85,11 +85,11 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
             reserveCollateral: amount
         });
 
-        tokenToCondition[yesToken] = conditionId;
-        tokenToCondition[noToken] = conditionId;
+        tokenToUniverse[yesToken] = universeId;
+        tokenToUniverse[noToken] = universeId;
 
-        SafeTransferLib.safeApprove(collateral, address(conditionalMarket), amount);
-        conditionalMarket.split(conditionId, amount);
+        SafeTransferLib.safeApprove(collateral, address(multiverseMarket), amount);
+        multiverseMarket.split(universeId, amount);
     }
 
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
@@ -119,20 +119,20 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         if (!isBuy && !isSell) revert CrossUniverseSwapsNotSupportedYet();
 
         if (isBuy) {
-            if (conditionalMarket.resolved(cid) != address(0)) revert MarketResolved();
+            if (multiverseMarket.resolved(cid) != address(0)) revert MarketResolved();
             return 1;
         }
 
-        address winner = conditionalMarket.resolved(cid);
+        address winner = multiverseMarket.resolved(cid);
         if (winner == address(0)) return 2;
         if (winner != Currency.unwrap(tokenIn)) revert TokenNotWinner();
         return 3;
     }
 
     function _resolveCondition(Currency tokenIn, Currency tokenOut) internal view returns (bytes32) {
-        bytes32 cid = tokenToCondition[Currency.unwrap(tokenIn)];
+        bytes32 cid = tokenToUniverse[Currency.unwrap(tokenIn)];
         if (cid != bytes32(0)) return cid;
-        cid = tokenToCondition[Currency.unwrap(tokenOut)];
+        cid = tokenToUniverse[Currency.unwrap(tokenOut)];
         if (cid != bytes32(0)) return cid;
         revert UnknownToken();
     }
@@ -163,8 +163,8 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         revert NotImplementedYet();
     }
 
-    function calcMarginalPrice(bytes32 conditionId, Currency token) public view returns (uint256) {
-        MarketState storage state = markets[conditionId];
+    function calcMarginalPrice(bytes32 universeId, Currency token) public view returns (uint256) {
+        MarketState storage state = markets[universeId];
         uint256 yesPrice = LMSRMath.calcMarginalPriceBinary(
             state.reserveYes, state.reserveNo, state.funding, 6
         );
@@ -213,9 +213,9 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
 
         poolManager.take(tokenIn, address(this), cost);
         SafeTransferLib.safeApprove(
-            Currency.unwrap(state.collateralToken), address(conditionalMarket), cost
+            Currency.unwrap(state.collateralToken), address(multiverseMarket), cost
         );
-        conditionalMarket.split(cid, cost);
+        multiverseMarket.split(cid, cost);
 
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), delta);
@@ -278,7 +278,7 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         if (tokensIn == 0 || collateralOut == 0) revert InsufficientLiquidity();
 
         poolManager.take(tokenIn, address(this), tokensIn);
-        conditionalMarket.merge(cid, collateralOut);
+        multiverseMarket.merge(cid, collateralOut);
 
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), collateralOut);
@@ -312,7 +312,7 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
             : uint256(params.amountSpecified);
 
         poolManager.take(tokenIn, address(this), amount);
-        conditionalMarket.redeem(Currency.unwrap(tokenIn), amount);
+        multiverseMarket.redeem(Currency.unwrap(tokenIn), amount);
 
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), amount);

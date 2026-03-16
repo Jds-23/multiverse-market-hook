@@ -11,12 +11,12 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Factory + escrow for binary outcome prediction markets.
-/// Deploys YES/NO tokens per condition, handles split/merge/redeem lifecycle.
-contract ConditionalMarkets {
+/// @notice Factory + escrow for binary prediction markets.
+/// Deploys YES/NO tokens per universe, handles split/merge/redeem lifecycle.
+contract MultiverseMarkets {
     // ── Data Model ──────────────────────────────────────────────────────
 
-    struct Condition {
+    struct Universe {
         address collateralToken;
         address yesToken;
         address noToken;
@@ -27,18 +27,18 @@ contract ConditionalMarkets {
     IMarketHook public hook;
     bool public hookSet;
 
-    mapping(bytes32 => Condition) public conditions;
+    mapping(bytes32 => Universe) public universes;
     mapping(bytes32 => mapping(address => uint256)) public collateralBalances;
     mapping(bytes32 => address) public resolved;
-    mapping(address => bytes32) public tokenCondition;
+    mapping(address => bytes32) public tokenUniverse;
 
     // ── Errors ──────────────────────────────────────────────────────────
 
-    error InvalidConditionId();
-    error ConditionAlreadyExists(bytes32 conditionId);
+    error InvalidUniverseId();
+    error UniverseAlreadyExists(bytes32 universeId);
     error InvalidWinner(address winner);
-    error ConditionAlreadyResolved();
-    error ConditionNotResolved(bytes32 conditionId);
+    error UniverseAlreadyResolved();
+    error UniverseNotResolved(bytes32 universeId);
     error TokenNotWinner(address token);
     error UnknownToken(address token);
     error ZeroAmount();
@@ -48,20 +48,20 @@ contract ConditionalMarkets {
 
     // ── Events ──────────────────────────────────────────────────────────
 
-    event ConditionCreated(
-        bytes32 indexed conditionId, address collateralToken, address yesToken, address noToken
+    event UniverseCreated(
+        bytes32 indexed universeId, address collateralToken, address yesToken, address noToken
     );
-    event Split(bytes32 indexed conditionId, address indexed sender, uint256 amount);
-    event Merged(bytes32 indexed conditionId, address indexed sender, uint256 amount);
-    event Resolved(bytes32 indexed conditionId, address indexed winner);
+    event Split(bytes32 indexed universeId, address indexed sender, uint256 amount);
+    event Merged(bytes32 indexed universeId, address indexed sender, uint256 amount);
+    event Resolved(bytes32 indexed universeId, address indexed winner);
     event Redeemed(
-        bytes32 indexed conditionId, address indexed sender, address indexed token, uint256 amount
+        bytes32 indexed universeId, address indexed sender, address indexed token, uint256 amount
     );
 
     // ── Modifiers ───────────────────────────────────────────────────────
 
-    modifier notResolved(bytes32 conditionId) {
-        if (resolved[conditionId] != address(0)) revert ConditionAlreadyResolved();
+    modifier notResolved(bytes32 universeId) {
+        if (resolved[universeId] != address(0)) revert UniverseAlreadyResolved();
         _;
     }
 
@@ -79,34 +79,34 @@ contract ConditionalMarkets {
         hookSet = true;
     }
 
-    function createMarket(bytes32 conditionId, address collateralToken, uint256 amount) external {
+    function createMarket(bytes32 universeId, address collateralToken, uint256 amount) external {
         if (!hookSet) revert HookNotSet();
-        if (conditionId == bytes32(0)) revert InvalidConditionId();
-        if (conditions[conditionId].collateralToken != address(0)) {
-            revert ConditionAlreadyExists(conditionId);
+        if (universeId == bytes32(0)) revert InvalidUniverseId();
+        if (universes[universeId].collateralToken != address(0)) {
+            revert UniverseAlreadyExists(universeId);
         }
 
         // Deploy YES/NO tokens
-        string memory hexId = _bytes32ToHexString(conditionId);
+        string memory hexId = _bytes32ToHexString(universeId);
         MultiverseToken yesToken = new MultiverseToken(string.concat("YES-", hexId), "YES");
         MultiverseToken noToken = new MultiverseToken(string.concat("NO-", hexId), "NO");
 
-        conditions[conditionId] = Condition({
+        universes[universeId] = Universe({
             collateralToken: collateralToken,
             yesToken: address(yesToken),
             noToken: address(noToken)
         });
 
-        tokenCondition[address(yesToken)] = conditionId;
-        tokenCondition[address(noToken)] = conditionId;
+        tokenUniverse[address(yesToken)] = universeId;
+        tokenUniverse[address(noToken)] = universeId;
 
-        emit ConditionCreated(conditionId, collateralToken, address(yesToken), address(noToken));
+        emit UniverseCreated(universeId, collateralToken, address(yesToken), address(noToken));
 
         // Transfer collateral from caller to hook
         SafeTransferLib.safeTransferFrom(collateralToken, msg.sender, address(hook), amount);
 
         // Callback: hook splits collateral into YES/NO
-        hook.onCreateMarket(conditionId, collateralToken, address(yesToken), address(noToken), amount);
+        hook.onCreateMarket(universeId, collateralToken, address(yesToken), address(noToken), amount);
 
         // Initialize 3 pools
         uint160 sqrtPrice1_1 = TickMath.getSqrtPriceAtTick(0);
@@ -115,61 +115,61 @@ contract ConditionalMarkets {
         poolManager.initialize(_makePoolKey(Currency.wrap(address(yesToken)), Currency.wrap(address(noToken))), sqrtPrice1_1);
     }
 
-    function split(bytes32 conditionId, uint256 amount) external notResolved(conditionId) {
-        Condition storage c = conditions[conditionId];
+    function split(bytes32 universeId, uint256 amount) external notResolved(universeId) {
+        Universe storage c = universes[universeId];
 
         SafeTransferLib.safeTransferFrom(c.collateralToken, msg.sender, address(this), amount);
-        collateralBalances[conditionId][c.collateralToken] += amount;
+        collateralBalances[universeId][c.collateralToken] += amount;
 
         MultiverseToken(c.yesToken).mint(msg.sender, amount);
         MultiverseToken(c.noToken).mint(msg.sender, amount);
 
-        emit Split(conditionId, msg.sender, amount);
+        emit Split(universeId, msg.sender, amount);
     }
 
-    function merge(bytes32 conditionId, uint256 amount) external notResolved(conditionId) {
-        Condition storage c = conditions[conditionId];
+    function merge(bytes32 universeId, uint256 amount) external notResolved(universeId) {
+        Universe storage c = universes[universeId];
 
         MultiverseToken(c.yesToken).burn(msg.sender, amount);
         MultiverseToken(c.noToken).burn(msg.sender, amount);
 
-        collateralBalances[conditionId][c.collateralToken] -= amount;
+        collateralBalances[universeId][c.collateralToken] -= amount;
         SafeTransferLib.safeTransfer(c.collateralToken, msg.sender, amount);
 
-        emit Merged(conditionId, msg.sender, amount);
+        emit Merged(universeId, msg.sender, amount);
     }
 
-    function resolve(bytes32 conditionId, address winner) external {
-        if (resolved[conditionId] != address(0)) revert ConditionAlreadyResolved();
+    function resolve(bytes32 universeId, address winner) external {
+        if (resolved[universeId] != address(0)) revert UniverseAlreadyResolved();
 
-        Condition storage c = conditions[conditionId];
+        Universe storage c = universes[universeId];
         if (winner != c.yesToken && winner != c.noToken) revert InvalidWinner(winner);
 
-        resolved[conditionId] = winner;
+        resolved[universeId] = winner;
 
-        emit Resolved(conditionId, winner);
+        emit Resolved(universeId, winner);
     }
 
     function redeem(address token, uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
 
-        bytes32 conditionId = tokenCondition[token];
-        if (conditionId == bytes32(0)) revert UnknownToken(token);
+        bytes32 universeId = tokenUniverse[token];
+        if (universeId == bytes32(0)) revert UnknownToken(token);
 
-        address winner = resolved[conditionId];
-        if (winner == address(0)) revert ConditionNotResolved(conditionId);
+        address winner = resolved[universeId];
+        if (winner == address(0)) revert UniverseNotResolved(universeId);
         if (token != winner) revert TokenNotWinner(token);
 
         uint256 balance = ERC20(token).balanceOf(msg.sender);
         if (balance < amount) revert InsufficientBalance(token, amount, balance);
 
-        Condition storage c = conditions[conditionId];
+        Universe storage c = universes[universeId];
 
         MultiverseToken(token).burn(msg.sender, amount);
-        collateralBalances[conditionId][c.collateralToken] -= amount;
+        collateralBalances[universeId][c.collateralToken] -= amount;
         SafeTransferLib.safeTransfer(c.collateralToken, msg.sender, amount);
 
-        emit Redeemed(conditionId, msg.sender, token, amount);
+        emit Redeemed(universeId, msg.sender, token, amount);
     }
 
     // ── Internal Helpers ────────────────────────────────────────────────

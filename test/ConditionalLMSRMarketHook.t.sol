@@ -20,7 +20,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {BaseTest} from "./utils/BaseTest.sol";
 import {SimpleERC20} from "../src/SimpleERC20.sol";
-import {ConditionalMarkets} from "../src/ConditionalMarkets.sol";
+import {MultiverseMarkets} from "../src/MultiverseMarkets.sol";
 import {ConditionalLMSRMarketHook} from "../src/ConditionalLMSRMarketHook.sol";
 import {console} from "forge-std/console.sol";
 
@@ -31,12 +31,12 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
 
     uint256 constant FUNDING = 10_000e6;
     uint256 constant INITIAL_LIQUIDITY = 10_000e6;
-    bytes32 constant CONDITION_ID = keccak256("test-condition");
-    bytes32 constant CONDITION_ID_2 = keccak256("test-condition-2");
+    bytes32 constant UNIVERSE_ID = keccak256("test-condition");
+    bytes32 constant UNIVERSE_ID_2 = keccak256("test-condition-2");
 
     ConditionalLMSRMarketHook hook;
     SimpleERC20 collateral;
-    ConditionalMarkets conditionalMarkets;
+    MultiverseMarkets multiverseMarkets;
 
     Currency collateralCurrency;
     Currency yesCurrency;
@@ -61,11 +61,11 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         // 1. Deploy infrastructure
         deployArtifactsAndLabel();
 
-        // 2. Deploy collateral + ConditionalMarkets
+        // 2. Deploy collateral + MultiverseMarkets
         collateral = new SimpleERC20("Collateral", "COL");
-        conditionalMarkets = new ConditionalMarkets(poolManager);
+        multiverseMarkets = new MultiverseMarkets(poolManager);
         vm.label(address(collateral), "Collateral");
-        vm.label(address(conditionalMarkets), "ConditionalMarkets");
+        vm.label(address(multiverseMarkets), "MultiverseMarkets");
 
         // 3. Compute flag address and deploy hook
         address flags = address(
@@ -74,27 +74,27 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
                     | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
             ) ^ (0x4444 << 144)
         );
-        bytes memory constructorArgs = abi.encode(poolManager, conditionalMarkets);
+        bytes memory constructorArgs = abi.encode(poolManager, multiverseMarkets);
         deployCodeTo("ConditionalLMSRMarketHook.sol:ConditionalLMSRMarketHook", constructorArgs, flags);
         hook = ConditionalLMSRMarketHook(flags);
         vm.label(flags, "Hook");
 
         // 4. Wire hook to CM
-        conditionalMarkets.setHook(hook);
+        multiverseMarkets.setHook(hook);
 
         // 5. Mint collateral and approve CM
         collateral.mint(address(this), INITIAL_LIQUIDITY * 10);
-        collateral.approve(address(conditionalMarkets), type(uint256).max);
+        collateral.approve(address(multiverseMarkets), type(uint256).max);
 
         // 6. Create market (deploys tokens, splits, initializes pools)
-        conditionalMarkets.createMarket(CONDITION_ID, address(collateral), FUNDING);
+        multiverseMarkets.createMarket(UNIVERSE_ID, address(collateral), FUNDING);
 
         // 7. Split some tokens for test contract (needed for pre-transfer sell/redeem patterns)
-        collateral.approve(address(conditionalMarkets), type(uint256).max);
-        conditionalMarkets.split(CONDITION_ID, INITIAL_LIQUIDITY * 2);
+        collateral.approve(address(multiverseMarkets), type(uint256).max);
+        multiverseMarkets.split(UNIVERSE_ID, INITIAL_LIQUIDITY * 2);
 
         // 8. Read YES/NO tokens
-        (address colAddr, address yesAddr, address noAddr) = conditionalMarkets.conditions(CONDITION_ID);
+        (address colAddr, address yesAddr, address noAddr) = multiverseMarkets.universes(UNIVERSE_ID);
         collateralCurrency = Currency.wrap(colAddr);
         yesCurrency = Currency.wrap(yesAddr);
         noCurrency = Currency.wrap(noAddr);
@@ -112,53 +112,53 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
 
         IERC20(yesAddr).approve(address(hook), type(uint256).max);
         IERC20(yesAddr).approve(address(poolManager), type(uint256).max);
-        IERC20(yesAddr).approve(address(conditionalMarkets), type(uint256).max);
+        IERC20(yesAddr).approve(address(multiverseMarkets), type(uint256).max);
 
         IERC20(noAddr).approve(address(hook), type(uint256).max);
         IERC20(noAddr).approve(address(poolManager), type(uint256).max);
-        IERC20(noAddr).approve(address(conditionalMarkets), type(uint256).max);
+        IERC20(noAddr).approve(address(multiverseMarkets), type(uint256).max);
     }
 
     function test_setUp() public view {
-        (,,,,uint256 resYes, uint256 resNo, uint256 resCol) = hook.markets(CONDITION_ID);
+        (,,,,uint256 resYes, uint256 resNo, uint256 resCol) = hook.markets(UNIVERSE_ID);
         assertEq(resCol, INITIAL_LIQUIDITY);
         assertEq(resYes, INITIAL_LIQUIDITY);
         assertEq(resNo, INITIAL_LIQUIDITY);
     }
 
     function test_marketState() public view {
-        (Currency col, Currency yes, Currency no, uint256 funding,,,) = hook.markets(CONDITION_ID);
+        (Currency col, Currency yes, Currency no, uint256 funding,,,) = hook.markets(UNIVERSE_ID);
         assertEq(Currency.unwrap(col), address(collateral));
         assertEq(Currency.unwrap(yes), Currency.unwrap(yesCurrency));
         assertEq(Currency.unwrap(no), Currency.unwrap(noCurrency));
         assertEq(funding, FUNDING);
-        assertEq(address(hook.conditionalMarket()), address(conditionalMarkets));
+        assertEq(address(hook.multiverseMarket()), address(multiverseMarkets));
     }
 
     // ── Pricing Invariants ───────────────────────────────────────────────
 
     function test_marginalPrice_equalReserves() public view {
-        assertEq(hook.calcMarginalPrice(CONDITION_ID, yesCurrency), 0.5e18);
-        assertEq(hook.calcMarginalPrice(CONDITION_ID, noCurrency), 0.5e18);
+        assertEq(hook.calcMarginalPrice(UNIVERSE_ID, yesCurrency), 0.5e18);
+        assertEq(hook.calcMarginalPrice(UNIVERSE_ID, noCurrency), 0.5e18);
     }
 
     function test_marginalPrice_sumEqualsOne() public view {
-        uint256 sum = hook.calcMarginalPrice(CONDITION_ID, yesCurrency) + hook.calcMarginalPrice(CONDITION_ID, noCurrency);
+        uint256 sum = hook.calcMarginalPrice(UNIVERSE_ID, yesCurrency) + hook.calcMarginalPrice(UNIVERSE_ID, noCurrency);
         assertApproxEqAbs(sum, 1e18, 1);
     }
 
     function test_price_increases_after_buying_yes() public {
         collateral.mint(address(poolManager), INITIAL_LIQUIDITY * 10);
 
-        uint256 priceBefore = hook.calcMarginalPrice(CONDITION_ID, yesCurrency);
+        uint256 priceBefore = hook.calcMarginalPrice(UNIVERSE_ID, yesCurrency);
         assertEq(priceBefore, 0.5e18);
 
         swapExactOutput(address(collateral), Currency.unwrap(yesCurrency), 1000e6, type(uint256).max);
 
-        uint256 priceAfter = hook.calcMarginalPrice(CONDITION_ID, yesCurrency);
+        uint256 priceAfter = hook.calcMarginalPrice(UNIVERSE_ID, yesCurrency);
         assertGt(priceAfter, priceBefore);
         assertApproxEqAbs(
-            hook.calcMarginalPrice(CONDITION_ID, yesCurrency) + hook.calcMarginalPrice(CONDITION_ID, noCurrency),
+            hook.calcMarginalPrice(UNIVERSE_ID, yesCurrency) + hook.calcMarginalPrice(UNIVERSE_ID, noCurrency),
             1e18,
             1
         );
@@ -167,7 +167,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
     // ── Swap Validation ────────────────────────────────────────────────
 
     function test_swap_buy_reverts_when_resolved() public {
-        conditionalMarkets.resolve(CONDITION_ID, Currency.unwrap(yesCurrency));
+        multiverseMarkets.resolve(UNIVERSE_ID, Currency.unwrap(yesCurrency));
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -255,7 +255,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
     }
 
     function test_swap_sell_postResolution_reverts_losingToken() public {
-        conditionalMarkets.resolve(CONDITION_ID, Currency.unwrap(yesCurrency));
+        multiverseMarkets.resolve(UNIVERSE_ID, Currency.unwrap(yesCurrency));
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -299,7 +299,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         uint256 cost = colBefore - colAfter;
         assertGt(cost, 0);
         assertApproxEqRel(cost, deltaYes / 2, 0.1e18);
-        (,,,,uint256 resYes,,) = hook.markets(CONDITION_ID);
+        (,,,,uint256 resYes,,) = hook.markets(UNIVERSE_ID);
         assertEq(resYes, (INITIAL_LIQUIDITY+cost) - deltaYes);
     }
 
@@ -315,7 +315,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         assertEq(noAfter - noBefore, deltaNO);
         uint256 cost = colBefore - collateral.balanceOf(address(this));
         assertGt(cost, 0);
-        (,,,,,uint256 resNo,) = hook.markets(CONDITION_ID);
+        (,,,,,uint256 resNo,) = hook.markets(UNIVERSE_ID);
         assertEq(resNo, (INITIAL_LIQUIDITY+cost) - deltaNO);
     }
 
@@ -340,7 +340,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         assertGt(colGained, 0, "Sell: should receive collateral back");
 
         _assertReserves(
-            CONDITION_ID,
+            UNIVERSE_ID,
             (INITIAL_LIQUIDITY + buyCost) - 100e6 - colGained + 50e6,
             (INITIAL_LIQUIDITY + buyCost) - colGained
         );
@@ -367,7 +367,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         assertGt(colGained, 0, "Sell: should receive collateral back");
 
         _assertReserves(
-            CONDITION_ID,
+            UNIVERSE_ID,
             (INITIAL_LIQUIDITY + buyCost) - colGained,
             (INITIAL_LIQUIDITY + buyCost) - 200e6 - colGained + 100e6
         );
@@ -378,7 +378,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
 
         swapExactOutput(address(collateral), Currency.unwrap(yesCurrency), 100e6, type(uint256).max);
 
-        conditionalMarkets.resolve(CONDITION_ID, Currency.unwrap(yesCurrency));
+        multiverseMarkets.resolve(UNIVERSE_ID, Currency.unwrap(yesCurrency));
 
         uint256 yesToRedeem = 100e6;
         uint256 yesBefore = IERC20(Currency.unwrap(yesCurrency)).balanceOf(address(this));
@@ -396,7 +396,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
 
         swapExactOutput(address(collateral), Currency.unwrap(yesCurrency), 100e6, type(uint256).max);
 
-        conditionalMarkets.resolve(CONDITION_ID, Currency.unwrap(yesCurrency));
+        multiverseMarkets.resolve(UNIVERSE_ID, Currency.unwrap(yesCurrency));
 
         uint256 colToRedeem = 100e6;
         uint256 colBefore = collateral.balanceOf(address(this));
@@ -431,7 +431,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         assertGt(sellProceeds, 0, "Sell: received collateral");
 
         // 3. Resolve: YES wins
-        conditionalMarkets.resolve(CONDITION_ID, Currency.unwrap(yesCurrency));
+        multiverseMarkets.resolve(UNIVERSE_ID, Currency.unwrap(yesCurrency));
 
         // 4. Redeem 100 YES → 100 collateral (1:1)
         colBefore = collateral.balanceOf(address(this));
@@ -445,10 +445,10 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
     function test_multiMarket_independentPricing() public {
         // Create second market
         collateral.mint(address(this), INITIAL_LIQUIDITY * 10);
-        collateral.approve(address(conditionalMarkets), type(uint256).max);
-        conditionalMarkets.createMarket(CONDITION_ID_2, address(collateral), FUNDING);
+        collateral.approve(address(multiverseMarkets), type(uint256).max);
+        multiverseMarkets.createMarket(UNIVERSE_ID_2, address(collateral), FUNDING);
 
-        (, address yes2Addr,) = conditionalMarkets.conditions(CONDITION_ID_2);
+        (, address yes2Addr,) = multiverseMarkets.universes(UNIVERSE_ID_2);
         Currency yes2Currency = Currency.wrap(yes2Addr);
 
         // Approve second market tokens
@@ -458,34 +458,34 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         collateral.mint(address(poolManager), INITIAL_LIQUIDITY * 10);
         swapExactOutput(address(collateral), Currency.unwrap(yesCurrency), 1000e6, type(uint256).max);
 
-        // Condition 1 price moved
-        uint256 price1 = hook.calcMarginalPrice(CONDITION_ID, yesCurrency);
-        assertGt(price1, 0.5e18, "Condition 1 YES price should increase");
+        // Universe 1 price moved
+        uint256 price1 = hook.calcMarginalPrice(UNIVERSE_ID, yesCurrency);
+        assertGt(price1, 0.5e18, "Universe 1 YES price should increase");
 
-        // Condition 2 price unchanged
-        uint256 price2 = hook.calcMarginalPrice(CONDITION_ID_2, yes2Currency);
-        assertEq(price2, 0.5e18, "Condition 2 YES price should be unchanged");
+        // Universe 2 price unchanged
+        uint256 price2 = hook.calcMarginalPrice(UNIVERSE_ID_2, yes2Currency);
+        assertEq(price2, 0.5e18, "Universe 2 YES price should be unchanged");
     }
 
     function test_multiMarket_duplicateReverts() public {
-        vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.ConditionAlreadyExists.selector, CONDITION_ID));
-        conditionalMarkets.createMarket(CONDITION_ID, address(collateral), FUNDING);
+        vm.expectRevert(abi.encodeWithSelector(MultiverseMarkets.UniverseAlreadyExists.selector, UNIVERSE_ID));
+        multiverseMarkets.createMarket(UNIVERSE_ID, address(collateral), FUNDING);
     }
 
     function test_multiMarket_differentCollateral() public {
         SimpleERC20 collateral2 = new SimpleERC20("Collateral2", "COL2");
         collateral2.mint(address(this), INITIAL_LIQUIDITY * 10);
-        collateral2.approve(address(conditionalMarkets), type(uint256).max);
+        collateral2.approve(address(multiverseMarkets), type(uint256).max);
 
-        conditionalMarkets.createMarket(CONDITION_ID_2, address(collateral2), FUNDING);
+        multiverseMarkets.createMarket(UNIVERSE_ID_2, address(collateral2), FUNDING);
 
-        (address col2Addr,,) = conditionalMarkets.conditions(CONDITION_ID_2);
+        (address col2Addr,,) = multiverseMarkets.universes(UNIVERSE_ID_2);
         assertEq(col2Addr, address(collateral2));
     }
 
     function test_onCreateMarket_accessControl() public {
         vm.expectRevert(ConditionalLMSRMarketHook.OnlyConditionalMarket.selector);
-        hook.onCreateMarket(CONDITION_ID_2, address(collateral), address(0x1), address(0x2), 100);
+        hook.onCreateMarket(UNIVERSE_ID_2, address(collateral), address(0x1), address(0x2), 100);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

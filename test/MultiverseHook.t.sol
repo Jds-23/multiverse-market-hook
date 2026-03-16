@@ -21,11 +21,11 @@ import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {BaseTest} from "./utils/BaseTest.sol";
 import {SimpleERC20} from "../src/SimpleERC20.sol";
 import {MultiverseMarkets} from "../src/MultiverseMarkets.sol";
-import {ConditionalLMSRMarketHook} from "../src/ConditionalLMSRMarketHook.sol";
+import {MultiverseHook} from "../src/MultiverseHook.sol";
 import {console} from "forge-std/console.sol";
 
 
-contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
+contract MultiverseHookTest is BaseTest, IUnlockCallback {
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
 
@@ -34,7 +34,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
     bytes32 constant UNIVERSE_ID = keccak256("test-condition");
     bytes32 constant UNIVERSE_ID_2 = keccak256("test-condition-2");
 
-    ConditionalLMSRMarketHook hook;
+    MultiverseHook hook;
     SimpleERC20 collateral;
     MultiverseMarkets multiverseMarkets;
 
@@ -75,8 +75,8 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
             ) ^ (0x4444 << 144)
         );
         bytes memory constructorArgs = abi.encode(poolManager, multiverseMarkets);
-        deployCodeTo("ConditionalLMSRMarketHook.sol:ConditionalLMSRMarketHook", constructorArgs, flags);
-        hook = ConditionalLMSRMarketHook(flags);
+        deployCodeTo("MultiverseHook.sol:MultiverseHook", constructorArgs, flags);
+        hook = MultiverseHook(flags);
         vm.label(flags, "Hook");
 
         // 4. Wire hook to CM
@@ -174,7 +174,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
                 CustomRevert.WrappedError.selector,
                 address(hook),
                 IHooks.beforeSwap.selector,
-                abi.encodeWithSelector(ConditionalLMSRMarketHook.MarketResolved.selector),
+                abi.encodeWithSelector(MultiverseHook.MarketResolved.selector),
                 abi.encodeWithSelector(Hooks.HookCallFailed.selector)
             )
         );
@@ -262,7 +262,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
                 CustomRevert.WrappedError.selector,
                 address(hook),
                 IHooks.beforeSwap.selector,
-                abi.encodeWithSelector(ConditionalLMSRMarketHook.TokenNotWinner.selector),
+                abi.encodeWithSelector(MultiverseHook.TokenNotWinner.selector),
                 abi.encodeWithSelector(Hooks.HookCallFailed.selector)
             )
         );
@@ -275,7 +275,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
                 CustomRevert.WrappedError.selector,
                 address(hook),
                 IHooks.beforeSwap.selector,
-                abi.encodeWithSelector(ConditionalLMSRMarketHook.CrossUniverseSwapsNotSupportedYet.selector),
+                abi.encodeWithSelector(MultiverseHook.CrossUniverseSwapsNotSupportedYet.selector),
                 abi.encodeWithSelector(Hooks.HookCallFailed.selector)
             )
         );
@@ -454,7 +454,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
         // Approve second market tokens
         IERC20(yes2Addr).approve(address(poolManager), type(uint256).max);
 
-        // Buy YES on condition 1
+        // Buy YES on universe 1
         collateral.mint(address(poolManager), INITIAL_LIQUIDITY * 10);
         swapExactOutput(address(collateral), Currency.unwrap(yesCurrency), 1000e6, type(uint256).max);
 
@@ -484,7 +484,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
     }
 
     function test_onCreateMarket_accessControl() public {
-        vm.expectRevert(ConditionalLMSRMarketHook.OnlyConditionalMarket.selector);
+        vm.expectRevert(MultiverseHook.OnlyMultiverseMarket.selector);
         hook.onCreateMarket(UNIVERSE_ID_2, address(collateral), address(0x1), address(0x2), 100);
     }
 

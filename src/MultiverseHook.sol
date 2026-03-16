@@ -12,14 +12,14 @@ import {MultiverseMarkets} from "./MultiverseMarkets.sol";
 import {LMSRMath} from "./LMSRMath.sol";
 import {IMarketHook} from "./IMarketHook.sol";
 
-contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
+contract MultiverseHook is BaseHook, IMarketHook {
     error NotImplementedYet();
     error UnknownToken();
     error MarketResolved();
     error InsufficientLiquidity();
     error CrossUniverseSwapsNotSupportedYet();
     error TokenNotWinner();
-    error OnlyConditionalMarket();
+    error OnlyMultiverseMarket();
     error MarketAlreadyExists();
 
     uint8 internal constant DECIMALS = 6;
@@ -72,7 +72,7 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         address noToken,
         uint256 amount
     ) external override {
-        if (msg.sender != address(multiverseMarket)) revert OnlyConditionalMarket();
+        if (msg.sender != address(multiverseMarket)) revert OnlyMultiverseMarket();
         if (Currency.unwrap(markets[universeId].collateralToken) != address(0)) revert MarketAlreadyExists();
 
         markets[universeId] = MarketState({
@@ -100,7 +100,7 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         Currency tokenIn = params.zeroForOne ? key.currency0 : key.currency1;
         Currency tokenOut = params.zeroForOne ? key.currency1 : key.currency0;
 
-        bytes32 cid = _resolveCondition(tokenIn, tokenOut);
+        bytes32 cid = _resolveUniverse(tokenIn, tokenOut);
 
         uint8 action = _classifySwap(cid, tokenIn, tokenOut);
         if (action == 1) return _executeBuy(cid, tokenIn, tokenOut, params);
@@ -129,7 +129,7 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         return 3;
     }
 
-    function _resolveCondition(Currency tokenIn, Currency tokenOut) internal view returns (bytes32) {
+    function _resolveUniverse(Currency tokenIn, Currency tokenOut) internal view returns (bytes32) {
         bytes32 cid = tokenToUniverse[Currency.unwrap(tokenIn)];
         if (cid != bytes32(0)) return cid;
         cid = tokenToUniverse[Currency.unwrap(tokenOut)];

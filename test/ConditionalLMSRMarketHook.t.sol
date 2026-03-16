@@ -275,7 +275,7 @@ contract ConditionalLMSRMarketHookTest is BaseTest, IUnlockCallback {
                 CustomRevert.WrappedError.selector,
                 address(hook),
                 IHooks.beforeSwap.selector,
-                abi.encodeWithSelector(ConditionalLMSRMarketHook.CrossOutcomeSwapsNotSupportedYet.selector),
+                abi.encodeWithSelector(ConditionalLMSRMarketHook.CrossUniverseSwapsNotSupportedYet.selector),
                 abi.encodeWithSelector(Hooks.HookCallFailed.selector)
             )
         );

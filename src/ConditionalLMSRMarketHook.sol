@@ -17,7 +17,7 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
     error UnknownToken();
     error MarketResolved();
     error InsufficientLiquidity();
-    error CrossOutcomeSwapsNotSupportedYet();
+    error CrossUniverseSwapsNotSupportedYet();
     error TokenNotWinner();
     error OnlyConditionalMarket();
     error MarketAlreadyExists();
@@ -106,17 +106,17 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         if (action == 1) return _executeBuy(cid, tokenIn, tokenOut, params);
         if (action == 2) return _executeSell(cid, tokenIn, tokenOut, params);
         if (action == 3) return _executeRedeem(cid, tokenIn, tokenOut, params);
-        revert CrossOutcomeSwapsNotSupportedYet(); // unreachable if _classifySwap is correct
+        revert CrossUniverseSwapsNotSupportedYet(); // unreachable if _classifySwap is correct
     }
 
     /// @dev Returns 1=buy, 2=sell, 3=redeem. Reverts on invalid.
     function _classifySwap(bytes32 cid, Currency tokenIn, Currency tokenOut) internal view returns (uint8) {
         MarketState storage state = markets[cid];
 
-        bool isBuy = _currenciesEqual(tokenIn, state.collateralToken) && _isOutcomeToken(state, tokenOut);
-        bool isSell = _isOutcomeToken(state, tokenIn) && _currenciesEqual(tokenOut, state.collateralToken);
+        bool isBuy = _currenciesEqual(tokenIn, state.collateralToken) && _isMultiverseToken(state, tokenOut);
+        bool isSell = _isMultiverseToken(state, tokenIn) && _currenciesEqual(tokenOut, state.collateralToken);
 
-        if (!isBuy && !isSell) revert CrossOutcomeSwapsNotSupportedYet();
+        if (!isBuy && !isSell) revert CrossUniverseSwapsNotSupportedYet();
 
         if (isBuy) {
             if (conditionalMarket.resolved(cid) != address(0)) revert MarketResolved();
@@ -137,7 +137,7 @@ contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
         revert UnknownToken();
     }
 
-    function _isOutcomeToken(MarketState storage state, Currency token) internal view returns (bool) {
+    function _isMultiverseToken(MarketState storage state, Currency token) internal view returns (bool) {
         return _currenciesEqual(token, state.yesToken) || _currenciesEqual(token, state.noToken);
     }
 

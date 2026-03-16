@@ -4,7 +4,7 @@ pragma solidity ^0.8.13;
 import {Test} from "forge-std/Test.sol";
 import {ConditionalMarkets} from "../src/ConditionalMarkets.sol";
 import {IMarketHook} from "../src/IMarketHook.sol";
-import {OutcomeToken} from "../src/OutcomeToken.sol";
+import {MultiverseToken} from "../src/MultiverseToken.sol";
 import {SimpleERC20} from "../src/SimpleERC20.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -108,8 +108,8 @@ contract ConditionalMarketsTest is Test {
 
     function test_createMarket_tokenOwnerIsConditionalMarkets() public {
         (address yes, address no) = _createCondition();
-        assertEq(OutcomeToken(yes).owner(), address(cm));
-        assertEq(OutcomeToken(no).owner(), address(cm));
+        assertEq(MultiverseToken(yes).owner(), address(cm));
+        assertEq(MultiverseToken(no).owner(), address(cm));
     }
 
     function test_createMarket_reverseMappingsSet() public {
@@ -587,9 +587,9 @@ contract ConditionalMarketsTest is Test {
     function test_edge_outcomeTokenDirectMintByNonOwnerReverts() public {
         (address yes, address no) = _createCondition();
         vm.expectRevert();
-        OutcomeToken(yes).mint(alice, 100e6);
+        MultiverseToken(yes).mint(alice, 100e6);
         vm.expectRevert();
-        OutcomeToken(no).burn(alice, 100e6);
+        MultiverseToken(no).burn(alice, 100e6);
     }
 
     function test_edge_redeemAfterPartialMerge() public {

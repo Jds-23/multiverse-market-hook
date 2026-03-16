@@ -3,7 +3,7 @@ pragma solidity ^0.8.13;
 
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
-import {OutcomeToken} from "./OutcomeToken.sol";
+import {MultiverseToken} from "./MultiverseToken.sol";
 import {IMarketHook} from "./IMarketHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -88,8 +88,8 @@ contract ConditionalMarkets {
 
         // Deploy YES/NO tokens
         string memory hexId = _bytes32ToHexString(conditionId);
-        OutcomeToken yesToken = new OutcomeToken(string.concat("YES-", hexId), "YES");
-        OutcomeToken noToken = new OutcomeToken(string.concat("NO-", hexId), "NO");
+        MultiverseToken yesToken = new MultiverseToken(string.concat("YES-", hexId), "YES");
+        MultiverseToken noToken = new MultiverseToken(string.concat("NO-", hexId), "NO");
 
         conditions[conditionId] = Condition({
             collateralToken: collateralToken,
@@ -121,8 +121,8 @@ contract ConditionalMarkets {
         SafeTransferLib.safeTransferFrom(c.collateralToken, msg.sender, address(this), amount);
         collateralBalances[conditionId][c.collateralToken] += amount;
 
-        OutcomeToken(c.yesToken).mint(msg.sender, amount);
-        OutcomeToken(c.noToken).mint(msg.sender, amount);
+        MultiverseToken(c.yesToken).mint(msg.sender, amount);
+        MultiverseToken(c.noToken).mint(msg.sender, amount);
 
         emit Split(conditionId, msg.sender, amount);
     }
@@ -130,8 +130,8 @@ contract ConditionalMarkets {
     function merge(bytes32 conditionId, uint256 amount) external notResolved(conditionId) {
         Condition storage c = conditions[conditionId];
 
-        OutcomeToken(c.yesToken).burn(msg.sender, amount);
-        OutcomeToken(c.noToken).burn(msg.sender, amount);
+        MultiverseToken(c.yesToken).burn(msg.sender, amount);
+        MultiverseToken(c.noToken).burn(msg.sender, amount);
 
         collateralBalances[conditionId][c.collateralToken] -= amount;
         SafeTransferLib.safeTransfer(c.collateralToken, msg.sender, amount);
@@ -165,7 +165,7 @@ contract ConditionalMarkets {
 
         Condition storage c = conditions[conditionId];
 
-        OutcomeToken(token).burn(msg.sender, amount);
+        MultiverseToken(token).burn(msg.sender, amount);
         collateralBalances[conditionId][c.collateralToken] -= amount;
         SafeTransferLib.safeTransfer(c.collateralToken, msg.sender, amount);
 

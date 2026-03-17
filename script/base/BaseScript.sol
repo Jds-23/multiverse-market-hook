@@ -2,10 +2,12 @@
 pragma solidity ^0.8.26;
 
 import {Script} from "forge-std/Script.sol";
+import {console} from "forge-std/console.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
@@ -15,38 +17,24 @@ import {AddressConstants} from "hookmate/constants/AddressConstants.sol";
 
 import {Deployers} from "test/utils/Deployers.sol";
 
-/// @notice Shared configuration between scripts
+/// @notice Shared base for deployment scripts. Handles env, JSON artifacts, V4 infra.
 contract BaseScript is Script, Deployers {
-    address immutable deployerAddress;
-
-    /////////////////////////////////////
-    // --- Configure These ---
-    /////////////////////////////////////
-    IERC20 internal constant token0 = IERC20(0x0165878A594ca255338adfa4d48449f69242Eb8F);
-    IERC20 internal constant token1 = IERC20(0xa513E6E4b8f2a923D98304ec87F64353C4D5C853);
-    IHooks constant hookContract = IHooks(address(0));
-    /////////////////////////////////////
-
-    Currency immutable currency0;
-    Currency immutable currency1;
+    uint256 internal deployerPrivateKey;
+    address internal deployerAddress;
+    string deploymentPath;
 
     constructor() {
-        // Make sure artifacts are available, either deploy or configure.
-        deployArtifacts();
-
-        deployerAddress = getDeployer();
-
-        (currency0, currency1) = getCurrencies();
-
-        vm.label(address(permit2), "Permit2");
-        vm.label(address(poolManager), "V4PoolManager");
-        vm.label(address(positionManager), "V4PositionManager");
-        vm.label(address(swapRouter), "V4SwapRouter");
-
-        vm.label(address(token0), "Currency0");
-        vm.label(address(token1), "Currency1");
-
-        vm.label(address(hookContract), "HookContract");
+        if (block.chainid == 31337) {
+            deployArtifacts();
+        } else {
+            permit2 = IPermit2(AddressConstants.getPermit2Address());
+            poolManager = IPoolManager(AddressConstants.getPoolManagerAddress(block.chainid));
+            positionManager = IPositionManager(AddressConstants.getPositionManagerAddress(block.chainid));
+            swapRouter = IUniswapV4Router04(payable(AddressConstants.getV4SwapRouterAddress(block.chainid)));
+        }
+        deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        deployerAddress = vm.addr(deployerPrivateKey);
+        deploymentPath = vm.envOr("DEPLOYMENT_FILE", string("deployments/deployment.json"));
     }
 
     function _etch(address target, bytes memory bytecode) internal override {
@@ -57,23 +45,46 @@ contract BaseScript is Script, Deployers {
         }
     }
 
-    function getCurrencies() internal pure returns (Currency, Currency) {
-        require(address(token0) != address(token1));
+    // ── JSON Helpers ─────────────────────────────────────────────────────
 
-        if (token0 < token1) {
-            return (Currency.wrap(address(token0)), Currency.wrap(address(token1)));
-        } else {
-            return (Currency.wrap(address(token1)), Currency.wrap(address(token0)));
-        }
+    function _loadDeployment() internal view returns (string memory) {
+        return vm.readFile(deploymentPath);
     }
 
-    function getDeployer() internal returns (address) {
-        address[] memory wallets = vm.getWallets();
+    function _readAddress(string memory json, string memory key) internal pure returns (address) {
+        return abi.decode(vm.parseJson(json, key), (address));
+    }
 
-        if (wallets.length > 0) {
-            return wallets[0];
-        } else {
-            return msg.sender;
-        }
+    function _saveDeployment(string memory json) internal {
+        vm.writeJson(json, deploymentPath);
+    }
+
+    // ── Env Helpers ──────────────────────────────────────────────────────
+
+    function _envOr(string memory key, string memory fallback_) internal view returns (string memory) {
+        return vm.envOr(key, fallback_);
+    }
+
+    function _envOr(string memory key, uint256 fallback_) internal view returns (uint256) {
+        return vm.envOr(key, fallback_);
+    }
+
+    function _envOr(string memory key, bool fallback_) internal view returns (bool) {
+        return vm.envOr(key, fallback_);
+    }
+
+    // ── Pool Key Helper ──────────────────────────────────────────────────
+
+    function _makePoolKey(Currency a, Currency b, IHooks hook) internal pure returns (PoolKey memory) {
+        (Currency c0, Currency c1) = a < b ? (a, b) : (b, a);
+        return PoolKey(c0, c1, 0, 60, hook);
+    }
+
+    // ── Approval Helper ──────────────────────────────────────────────────
+
+    function _approveRouter(IERC20 token) internal {
+        token.approve(address(swapRouter), type(uint256).max);
+        token.approve(address(permit2), type(uint256).max);
+        permit2.approve(address(token), address(swapRouter), type(uint160).max, type(uint48).max);
     }
 }

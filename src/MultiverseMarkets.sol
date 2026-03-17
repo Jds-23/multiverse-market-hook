@@ -23,6 +23,7 @@ contract MultiverseMarkets {
     }
 
     IPoolManager public immutable poolManager;
+    address public immutable admin;
 
     IMarketHook public hook;
     bool public hookSet;
@@ -31,6 +32,7 @@ contract MultiverseMarkets {
     mapping(bytes32 => mapping(address => uint256)) public collateralBalances;
     mapping(bytes32 => address) public resolved;
     mapping(address => bytes32) public tokenUniverse;
+    mapping(bytes32 => address) public creatorOf;
 
     // ── Errors ──────────────────────────────────────────────────────────
 
@@ -45,11 +47,12 @@ contract MultiverseMarkets {
     error InsufficientBalance(address token, uint256 requested, uint256 available);
     error HookAlreadySet();
     error HookNotSet();
+    error NotCreatorOrAdmin();
 
     // ── Events ──────────────────────────────────────────────────────────
 
     event UniverseCreated(
-        bytes32 indexed universeId, address collateralToken, address yesToken, address noToken
+        bytes32 indexed universeId, address collateralToken, address yesToken, address noToken, address creator
     );
     event Split(bytes32 indexed universeId, address indexed sender, uint256 amount);
     event Merged(bytes32 indexed universeId, address indexed sender, uint256 amount);
@@ -69,6 +72,7 @@ contract MultiverseMarkets {
 
     constructor(IPoolManager _poolManager) {
         poolManager = _poolManager;
+        admin = msg.sender;
     }
 
     // ── External Functions ──────────────────────────────────────────────
@@ -99,8 +103,9 @@ contract MultiverseMarkets {
 
         tokenUniverse[address(yesToken)] = universeId;
         tokenUniverse[address(noToken)] = universeId;
+        creatorOf[universeId] = msg.sender;
 
-        emit UniverseCreated(universeId, collateralToken, address(yesToken), address(noToken));
+        emit UniverseCreated(universeId, collateralToken, address(yesToken), address(noToken), msg.sender);
 
         // Transfer collateral from caller to hook
         SafeTransferLib.safeTransferFrom(collateralToken, msg.sender, address(hook), amount);
@@ -141,6 +146,7 @@ contract MultiverseMarkets {
 
     function resolve(bytes32 universeId, address winner) external {
         if (resolved[universeId] != address(0)) revert UniverseAlreadyResolved();
+        if (msg.sender != creatorOf[universeId] && msg.sender != admin) revert NotCreatorOrAdmin();
 
         Universe storage c = universes[universeId];
         if (winner != c.yesToken && winner != c.noToken) revert InvalidWinner(winner);

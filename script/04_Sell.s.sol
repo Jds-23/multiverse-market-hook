@@ -38,6 +38,7 @@ contract SellScript is BaseScript {
         vm.startBroadcast(deployerPrivateKey);
 
         _approveRouter(IERC20(outcomeToken));
+        IERC20(outcomeToken).transfer(address(poolManager), amountIn);
 
         swapRouter.swapExactTokensForTokens({
             amountIn: amountIn,

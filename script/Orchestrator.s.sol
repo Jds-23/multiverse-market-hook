@@ -14,12 +14,16 @@ import {SimpleERC20} from "../src/SimpleERC20.sol";
 import {MultiverseMarkets} from "../src/MultiverseMarkets.sol";
 import {MultiverseHook} from "../src/MultiverseHook.sol";
 
-/// @notice Combines phases 0-2: deploy collateral, core, and create market in one broadcast
+/// @notice Combines phases 0-6: deploy, create market, buy, sell, resolve, redeem in one broadcast
 contract OrchestratorScript is BaseScript {
     function run() public {
         bool runPhase0 = _envOr("RUN_PHASE_0", true);
         bool runPhase1 = _envOr("RUN_PHASE_1", true);
         bool runPhase2 = _envOr("RUN_PHASE_2", true);
+        bool runPhase3 = _envOr("RUN_PHASE_3", false);
+        bool runPhase4 = _envOr("RUN_PHASE_4", false);
+        bool runPhase5 = _envOr("RUN_PHASE_5", false);
+        bool runPhase6 = _envOr("RUN_PHASE_6", false);
 
         address collateral;
         address factory;
@@ -44,6 +48,11 @@ contract OrchestratorScript is BaseScript {
         if (runPhase2) {
             _createMarket(collateral, factory);
         }
+
+        if (runPhase3) _buy(collateral, factory, hook);
+        if (runPhase4) _sell(collateral, factory, hook);
+        if (runPhase5) _resolveMarket(factory);
+        if (runPhase6) _redeemWinnings(factory);
 
         vm.stopBroadcast();
 
@@ -96,6 +105,97 @@ contract OrchestratorScript is BaseScript {
 
         (, address yesToken, address noToken) = MultiverseMarkets(factory).universes(universeId);
         console.log("Market created. YES:", yesToken, "NO:", noToken);
+    }
+
+    function _buy(address collateral, address factory, address hook) internal {
+        string memory universeStr = _envOr("UNIVERSE_ID", string("test-market-1"));
+        bytes32 universeId = keccak256(bytes(universeStr));
+        string memory side = _envOr("OUTCOME_SIDE", string("YES"));
+        uint256 amountIn = _envOr("BUY_AMOUNT", uint256(100e6));
+
+        (, address yesToken, address noToken) = MultiverseMarkets(factory).universes(universeId);
+        address outcomeToken = keccak256(bytes(side)) == keccak256("YES") ? yesToken : noToken;
+
+        Currency colCur = Currency.wrap(collateral);
+        Currency outCur = Currency.wrap(outcomeToken);
+        PoolKey memory poolKey = _makePoolKey(colCur, outCur, IHooks(hook));
+        bool zeroForOne = collateral < outcomeToken;
+
+        console.log("Buying", side, "tokens, amount:", amountIn);
+
+        _approveRouter(IERC20(collateral));
+        IERC20(collateral).transfer(address(poolManager), amountIn);
+        swapRouter.swapExactTokensForTokens({
+            amountIn: amountIn,
+            amountOutMin: 0,
+            zeroForOne: zeroForOne,
+            poolKey: poolKey,
+            hookData: new bytes(0),
+            receiver: deployerAddress,
+            deadline: block.timestamp + 300
+        });
+
+        console.log("Buy complete");
+    }
+
+    function _sell(address collateral, address factory, address hook) internal {
+        string memory universeStr = _envOr("UNIVERSE_ID", string("test-market-1"));
+        bytes32 universeId = keccak256(bytes(universeStr));
+        string memory side = _envOr("OUTCOME_SIDE", string("YES"));
+        uint256 amountIn = _envOr("SELL_AMOUNT", uint256(50e6));
+
+        (, address yesToken, address noToken) = MultiverseMarkets(factory).universes(universeId);
+        address outcomeToken = keccak256(bytes(side)) == keccak256("YES") ? yesToken : noToken;
+
+        Currency colCur = Currency.wrap(collateral);
+        Currency outCur = Currency.wrap(outcomeToken);
+        PoolKey memory poolKey = _makePoolKey(colCur, outCur, IHooks(hook));
+        bool zeroForOne = outcomeToken < collateral;
+
+        console.log("Selling", side, "tokens, amount:", amountIn);
+
+        _approveRouter(IERC20(outcomeToken));
+        IERC20(outcomeToken).transfer(address(poolManager), amountIn);
+        swapRouter.swapExactTokensForTokens({
+            amountIn: amountIn,
+            amountOutMin: 0,
+            zeroForOne: zeroForOne,
+            poolKey: poolKey,
+            hookData: new bytes(0),
+            receiver: deployerAddress,
+            deadline: block.timestamp + 300
+        });
+
+        console.log("Sell complete");
+    }
+
+    function _resolveMarket(address factory) internal {
+        string memory universeStr = _envOr("UNIVERSE_ID", string("test-market-1"));
+        bytes32 universeId = keccak256(bytes(universeStr));
+        string memory winnerSide = _envOr("WINNER_SIDE", string("YES"));
+
+        (, address yesToken, address noToken) = MultiverseMarkets(factory).universes(universeId);
+        address winner = keccak256(bytes(winnerSide)) == keccak256("YES") ? yesToken : noToken;
+
+        console.log("Resolving market, winner:", winnerSide, winner);
+        MultiverseMarkets(factory).resolve(universeId, winner);
+        console.log("Market resolved");
+    }
+
+    function _redeemWinnings(address factory) internal {
+        string memory universeStr = _envOr("UNIVERSE_ID", string("test-market-1"));
+        bytes32 universeId = keccak256(bytes(universeStr));
+
+        address winner = MultiverseMarkets(factory).resolved(universeId);
+        require(winner != address(0), "Market not resolved");
+
+        uint256 balance = IERC20(winner).balanceOf(deployerAddress);
+        require(balance > 0, "No winning tokens to redeem");
+
+        console.log("Redeeming", balance, "winning tokens");
+        IERC20(winner).approve(factory, balance);
+        MultiverseMarkets(factory).redeem(winner, balance);
+        console.log("Redeemed for collateral");
     }
 
     function _saveFullDeployment(address collateral, address factory, address hook) internal {

@@ -108,7 +108,7 @@ forge test --ffi
 anvil --code-size-limit 40000
 forge script script/00_DeployHook.s.sol \
     --rpc-url http://localhost:8545 \
-    --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+    --private-key <PRIVATE_KEY> \
     --broadcast
 ```
 
@@ -164,6 +164,7 @@ beforeSwapReturnDelta ✓  (returns custom settlement amounts)
 ## Resources
 
 - [Uniswap v4 Docs](https://docs.uniswap.org/contracts/v4/overview)
+- [Multiverse Finance](https://www.paradigm.xyz/2025/05/multiverse-finance)
 - [LMSR Paper — Hanson 2003](https://mason.gmu.edu/~rhanson/mktscore.pdf)
 - [LMSR Desmos Calculator](https://www.desmos.com/calculator/bwczrpaoqk)
 - [v4-by-example](https://v4-by-example.org)

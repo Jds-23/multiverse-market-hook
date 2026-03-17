@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 interface IMarketHook {
     function onCreateMarket(
-        bytes32 universeId,
+        bytes32 conditionId,
         address collateral,
         address yesToken,
         address noToken,

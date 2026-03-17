@@ -8,18 +8,18 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
-import {MultiverseMarkets} from "./MultiverseMarkets.sol";
+import {ConditionalMarkets} from "./ConditionalMarkets.sol";
 import {LMSRMath} from "./LMSRMath.sol";
 import {IMarketHook} from "./IMarketHook.sol";
 
-contract MultiverseHook is BaseHook, IMarketHook {
+contract ConditionalLMSRMarketHook is BaseHook, IMarketHook {
     error NotImplementedYet();
     error UnknownToken();
     error MarketResolved();
     error InsufficientLiquidity();
-    error CrossUniverseSwapsNotSupportedYet();
+    error CrossOutcomeSwapsNotSupportedYet();
     error TokenNotWinner();
-    error OnlyMultiverseMarket();
+    error OnlyConditionalMarket();
     error MarketAlreadyExists();
 
     uint8 internal constant DECIMALS = 6;
@@ -34,16 +34,16 @@ contract MultiverseHook is BaseHook, IMarketHook {
         uint256 reserveCollateral;
     }
 
-    MultiverseMarkets public immutable multiverseMarket;
+    ConditionalMarkets public immutable conditionalMarket;
 
     mapping(bytes32 => MarketState) public markets;
-    mapping(address => bytes32) public tokenToUniverse;
+    mapping(address => bytes32) public tokenToCondition;
 
     constructor(
         IPoolManager _poolManager,
-        MultiverseMarkets _multiverseMarket
+        ConditionalMarkets _conditionalMarket
     ) BaseHook(_poolManager) {
-        multiverseMarket = _multiverseMarket;
+        conditionalMarket = _conditionalMarket;
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -66,16 +66,16 @@ contract MultiverseHook is BaseHook, IMarketHook {
     }
 
     function onCreateMarket(
-        bytes32 universeId,
+        bytes32 conditionId,
         address collateral,
         address yesToken,
         address noToken,
         uint256 amount
     ) external override {
-        if (msg.sender != address(multiverseMarket)) revert OnlyMultiverseMarket();
-        if (Currency.unwrap(markets[universeId].collateralToken) != address(0)) revert MarketAlreadyExists();
+        if (msg.sender != address(conditionalMarket)) revert OnlyConditionalMarket();
+        if (Currency.unwrap(markets[conditionId].collateralToken) != address(0)) revert MarketAlreadyExists();
 
-        markets[universeId] = MarketState({
+        markets[conditionId] = MarketState({
             collateralToken: Currency.wrap(collateral),
             yesToken: Currency.wrap(yesToken),
             noToken: Currency.wrap(noToken),
@@ -85,11 +85,11 @@ contract MultiverseHook is BaseHook, IMarketHook {
             reserveCollateral: amount
         });
 
-        tokenToUniverse[yesToken] = universeId;
-        tokenToUniverse[noToken] = universeId;
+        tokenToCondition[yesToken] = conditionId;
+        tokenToCondition[noToken] = conditionId;
 
-        SafeTransferLib.safeApprove(collateral, address(multiverseMarket), amount);
-        multiverseMarket.split(universeId, amount);
+        SafeTransferLib.safeApprove(collateral, address(conditionalMarket), amount);
+        conditionalMarket.split(conditionId, amount);
     }
 
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
@@ -100,44 +100,44 @@ contract MultiverseHook is BaseHook, IMarketHook {
         Currency tokenIn = params.zeroForOne ? key.currency0 : key.currency1;
         Currency tokenOut = params.zeroForOne ? key.currency1 : key.currency0;
 
-        bytes32 cid = _resolveUniverse(tokenIn, tokenOut);
+        bytes32 cid = _resolveCondition(tokenIn, tokenOut);
 
         uint8 action = _classifySwap(cid, tokenIn, tokenOut);
         if (action == 1) return _executeBuy(cid, tokenIn, tokenOut, params);
         if (action == 2) return _executeSell(cid, tokenIn, tokenOut, params);
         if (action == 3) return _executeRedeem(cid, tokenIn, tokenOut, params);
-        revert CrossUniverseSwapsNotSupportedYet(); // unreachable if _classifySwap is correct
+        revert CrossOutcomeSwapsNotSupportedYet(); // unreachable if _classifySwap is correct
     }
 
     /// @dev Returns 1=buy, 2=sell, 3=redeem. Reverts on invalid.
     function _classifySwap(bytes32 cid, Currency tokenIn, Currency tokenOut) internal view returns (uint8) {
         MarketState storage state = markets[cid];
 
-        bool isBuy = _currenciesEqual(tokenIn, state.collateralToken) && _isMultiverseToken(state, tokenOut);
-        bool isSell = _isMultiverseToken(state, tokenIn) && _currenciesEqual(tokenOut, state.collateralToken);
+        bool isBuy = _currenciesEqual(tokenIn, state.collateralToken) && _isOutcomeToken(state, tokenOut);
+        bool isSell = _isOutcomeToken(state, tokenIn) && _currenciesEqual(tokenOut, state.collateralToken);
 
-        if (!isBuy && !isSell) revert CrossUniverseSwapsNotSupportedYet();
+        if (!isBuy && !isSell) revert CrossOutcomeSwapsNotSupportedYet();
 
         if (isBuy) {
-            if (multiverseMarket.resolved(cid) != address(0)) revert MarketResolved();
+            if (conditionalMarket.resolved(cid) != address(0)) revert MarketResolved();
             return 1;
         }
 
-        address winner = multiverseMarket.resolved(cid);
+        address winner = conditionalMarket.resolved(cid);
         if (winner == address(0)) return 2;
         if (winner != Currency.unwrap(tokenIn)) revert TokenNotWinner();
         return 3;
     }
 
-    function _resolveUniverse(Currency tokenIn, Currency tokenOut) internal view returns (bytes32) {
-        bytes32 cid = tokenToUniverse[Currency.unwrap(tokenIn)];
+    function _resolveCondition(Currency tokenIn, Currency tokenOut) internal view returns (bytes32) {
+        bytes32 cid = tokenToCondition[Currency.unwrap(tokenIn)];
         if (cid != bytes32(0)) return cid;
-        cid = tokenToUniverse[Currency.unwrap(tokenOut)];
+        cid = tokenToCondition[Currency.unwrap(tokenOut)];
         if (cid != bytes32(0)) return cid;
         revert UnknownToken();
     }
 
-    function _isMultiverseToken(MarketState storage state, Currency token) internal view returns (bool) {
+    function _isOutcomeToken(MarketState storage state, Currency token) internal view returns (bool) {
         return _currenciesEqual(token, state.yesToken) || _currenciesEqual(token, state.noToken);
     }
 
@@ -163,8 +163,8 @@ contract MultiverseHook is BaseHook, IMarketHook {
         revert NotImplementedYet();
     }
 
-    function calcMarginalPrice(bytes32 universeId, Currency token) public view returns (uint256) {
-        MarketState storage state = markets[universeId];
+    function calcMarginalPrice(bytes32 conditionId, Currency token) public view returns (uint256) {
+        MarketState storage state = markets[conditionId];
         uint256 yesPrice = LMSRMath.calcMarginalPriceBinary(
             state.reserveYes, state.reserveNo, state.funding, 6
         );
@@ -213,9 +213,9 @@ contract MultiverseHook is BaseHook, IMarketHook {
 
         poolManager.take(tokenIn, address(this), cost);
         SafeTransferLib.safeApprove(
-            Currency.unwrap(state.collateralToken), address(multiverseMarket), cost
+            Currency.unwrap(state.collateralToken), address(conditionalMarket), cost
         );
-        multiverseMarket.split(cid, cost);
+        conditionalMarket.split(cid, cost);
 
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), delta);
@@ -278,7 +278,7 @@ contract MultiverseHook is BaseHook, IMarketHook {
         if (tokensIn == 0 || collateralOut == 0) revert InsufficientLiquidity();
 
         poolManager.take(tokenIn, address(this), tokensIn);
-        multiverseMarket.merge(cid, collateralOut);
+        conditionalMarket.merge(cid, collateralOut);
 
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), collateralOut);
@@ -312,7 +312,7 @@ contract MultiverseHook is BaseHook, IMarketHook {
             : uint256(params.amountSpecified);
 
         poolManager.take(tokenIn, address(this), amount);
-        multiverseMarket.redeem(Currency.unwrap(tokenIn), amount);
+        conditionalMarket.redeem(Currency.unwrap(tokenIn), amount);
 
         poolManager.sync(tokenOut);
         SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), amount);

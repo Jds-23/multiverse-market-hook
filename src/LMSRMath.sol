@@ -248,51 +248,6 @@ library LMSRMath {
         }
     }
 
-    /// @notice Compute a zero-cost outcome-to-outcome swap for a binary market
-    /// @param balanceYes Current YES token balance
-    /// @param balanceNo Current NO token balance
-    /// @param tokensToSell Amount of tokens to sell (must be > 0 for non-zero result)
-    /// @param sellOutcomeIndex 0 = selling YES, 1 = selling NO
-    /// @param funding Market funding amount
-    /// @param decimals Token decimal places
-    /// @return tokensToBuy Tokens of the other outcome received, rounded down
-    function calcTokenSwapBinary(
-        uint256 balanceYes,
-        uint256 balanceNo,
-        uint256 tokensToSell,
-        uint256 sellOutcomeIndex,
-        uint256 funding,
-        uint8 decimals
-    ) internal pure returns (uint256 tokensToBuy) {
-        if (funding == 0) revert ZeroFunding();
-        if (decimals == 0 || decimals > 18) revert InvalidDecimals();
-        if (sellOutcomeIndex > 1) revert InvalidOutcomeIndex();
-        if (tokensToSell == 0) return 0;
-
-        int256 scale = int256(10 ** uint256(decimals));
-        int256 lnTwo = FixedPointMathLib.lnWad(2 * WAD);
-        int256 bWad = int256(funding) * WAD / scale * WAD / lnTwo;
-
-        (uint256 sPrime, uint256 ekPrime) =
-            _computeSumAndOutcomeExpBinary(balanceYes, balanceNo, sellOutcomeIndex, bWad, scale);
-
-        uint256 ejPrime = sPrime - ekPrime;
-
-        // exp(-δ_sell / b)
-        int256 negDeltaOverB = -int256(tokensToSell) * WAD / scale * WAD / bWad;
-        uint256 expNegDelta = uint256(FixedPointMathLib.expWad(negDeltaOverB));
-
-        // numerator = S' - E_k' · exp(-δ_sell / b)
-        uint256 numerator = sPrime - ekPrime.mulWad(expNegDelta);
-
-        // δ_buy = b · ln(numerator / E_j')
-        int256 lnRatio =
-            FixedPointMathLib.lnWad(int256(numerator)) - FixedPointMathLib.lnWad(int256(ejPrime));
-        int256 deltaWad = _sMulWad(bWad, lnRatio);
-
-        tokensToBuy = uint256(deltaWad) * uint256(scale) / uint256(WAD);
-    }
-
     // ─── Internal Helpers ───────────────────────────────────────────────
 
     function _validateInputs(uint256 n, uint256 funding, uint8 decimals) private pure {

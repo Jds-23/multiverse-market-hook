@@ -3,6 +3,7 @@ cache/
 out/
 
 # Ignores development (and goerli) broadcast logs
+/broadcast/**
 !/broadcast
 /broadcast/*/31337/
 /broadcast/*/5/
@@ -13,6 +14,9 @@ docs/
 
 # Dotenv file
 .env
+
+# Deployments
+deployments/
 
 # Node modules
 node_modules/

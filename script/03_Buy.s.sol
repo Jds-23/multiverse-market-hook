@@ -37,6 +37,7 @@ contract BuyScript is BaseScript {
         vm.startBroadcast(deployerPrivateKey);
 
         _approveRouter(IERC20(collateral));
+        IERC20(collateral).transfer(address(poolManager), amountIn);
 
         swapRouter.swapExactTokensForTokens({
             amountIn: amountIn,

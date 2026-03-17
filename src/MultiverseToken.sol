@@ -4,8 +4,8 @@ pragma solidity ^0.8.13;
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
-/// @notice Minimal ERC20 with owner-restricted mint/burn. Owner is always the ConditionalMarkets contract.
-contract OutcomeToken is ERC20, Ownable {
+/// @notice Minimal ERC20 with owner-restricted mint/burn. Owner is always the MultiverseMarkets contract.
+contract MultiverseToken is ERC20, Ownable {
     string internal _name;
     string internal _symbol;
 

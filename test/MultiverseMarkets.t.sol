@@ -2,22 +2,22 @@
 pragma solidity ^0.8.13;
 
 import {Test} from "forge-std/Test.sol";
-import {ConditionalMarkets} from "../src/ConditionalMarkets.sol";
+import {MultiverseMarkets} from "../src/MultiverseMarkets.sol";
 import {IMarketHook} from "../src/IMarketHook.sol";
-import {OutcomeToken} from "../src/OutcomeToken.sol";
+import {MultiverseToken} from "../src/MultiverseToken.sol";
 import {SimpleERC20} from "../src/SimpleERC20.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
-contract ConditionalMarketsTest is Test {
-    ConditionalMarkets cm;
+contract MultiverseMarketsTest is Test {
+    MultiverseMarkets cm;
     SimpleERC20 collateral;
 
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
 
-    bytes32 conditionId = keccak256("condition-1");
-    bytes32 conditionId2 = keccak256("condition-2");
+    bytes32 universeId = keccak256("condition-1");
+    bytes32 universeId2 = keccak256("condition-2");
 
     // Mock poolManager for constructor
     address mockPoolManager = makeAddr("poolManager");
@@ -27,7 +27,7 @@ contract ConditionalMarketsTest is Test {
         // Mock poolManager.initialize to succeed (returns tick 0)
         vm.mockCall(mockPoolManager, abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(int24(0)));
 
-        cm = new ConditionalMarkets(IPoolManager(mockPoolManager));
+        cm = new MultiverseMarkets(IPoolManager(mockPoolManager));
         collateral = new SimpleERC20("USD Coin", "USDC");
 
         collateral.mint(alice, 10_000e6);
@@ -44,7 +44,7 @@ contract ConditionalMarketsTest is Test {
     // Helpers
     // ═══════════════════════════════════════════════════════════════════
 
-    function _createConditionViaMarket(bytes32 _conditionId) internal returns (address yesToken, address noToken) {
+    function _createUniverseViaMarket(bytes32 _universeId) internal returns (address yesToken, address noToken) {
         // Set up a mock hook that does nothing on onCreateMarket
         if (!cm.hookSet()) {
             // Deploy a do-nothing mock for the hook
@@ -56,66 +56,66 @@ contract ConditionalMarketsTest is Test {
         uint256 amount = 100e6;
         collateral.mint(address(this), amount);
         collateral.approve(address(cm), amount);
-        cm.createMarket(_conditionId, address(collateral), amount);
-        (,address y, address n) = cm.conditions(_conditionId);
+        cm.createMarket(_universeId, address(collateral), amount);
+        (,address y, address n) = cm.universes(_universeId);
         return (y, n);
     }
 
-    function _createCondition() internal returns (address yesToken, address noToken) {
-        return _createConditionViaMarket(conditionId);
+    function _createUniverse() internal returns (address yesToken, address noToken) {
+        return _createUniverseViaMarket(universeId);
     }
 
-    function _createCondition2() internal returns (address yesToken, address noToken) {
-        return _createConditionViaMarket(conditionId2);
+    function _createUniverse2() internal returns (address yesToken, address noToken) {
+        return _createUniverseViaMarket(universeId2);
     }
 
     // Need to set up split/merge for tests that use them directly
     function _setupForSplitMerge() internal {
-        _createCondition();
+        _createUniverse();
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // Condition Creation (via createMarket)
+    // Universe Creation (via createMarket)
     // ═══════════════════════════════════════════════════════════════════
 
     function test_createMarket_storesStruct() public {
-        _createCondition();
-        (address col, address yes, address no) = cm.conditions(conditionId);
+        _createUniverse();
+        (address col, address yes, address no) = cm.universes(universeId);
         assertEq(col, address(collateral));
         assertTrue(yes != address(0));
         assertTrue(no != address(0));
         assertTrue(yes != no);
     }
 
-    function test_createMarket_tokenNamesEncodeConditionId() public {
-        (address yes, address no) = _createCondition();
-        string memory hexId = _bytes32ToHex(conditionId);
+    function test_createMarket_tokenNamesEncodeUniverseId() public {
+        (address yes, address no) = _createUniverse();
+        string memory hexId = _bytes32ToHex(universeId);
         assertEq(ERC20(yes).name(), string.concat("YES-", hexId));
         assertEq(ERC20(no).name(), string.concat("NO-", hexId));
     }
 
     function test_createMarket_tokenSymbols() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
         assertEq(ERC20(yes).symbol(), "YES");
         assertEq(ERC20(no).symbol(), "NO");
     }
 
     function test_createMarket_tokenDecimals() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
         assertEq(ERC20(yes).decimals(), 6);
         assertEq(ERC20(no).decimals(), 6);
     }
 
-    function test_createMarket_tokenOwnerIsConditionalMarkets() public {
-        (address yes, address no) = _createCondition();
-        assertEq(OutcomeToken(yes).owner(), address(cm));
-        assertEq(OutcomeToken(no).owner(), address(cm));
+    function test_createMarket_tokenOwnerIsMultiverseMarkets() public {
+        (address yes, address no) = _createUniverse();
+        assertEq(MultiverseToken(yes).owner(), address(cm));
+        assertEq(MultiverseToken(no).owner(), address(cm));
     }
 
     function test_createMarket_reverseMappingsSet() public {
-        (address yes, address no) = _createCondition();
-        assertEq(cm.tokenCondition(yes), conditionId);
-        assertEq(cm.tokenCondition(no), conditionId);
+        (address yes, address no) = _createUniverse();
+        assertEq(cm.tokenUniverse(yes), universeId);
+        assertEq(cm.tokenUniverse(no), universeId);
     }
 
     function test_createMarket_emitsEvent() public {
@@ -127,34 +127,34 @@ contract ConditionalMarketsTest is Test {
         collateral.approve(address(cm), 100e6);
 
         vm.expectEmit(true, false, false, false);
-        emit ConditionalMarkets.ConditionCreated(conditionId, address(0), address(0), address(0));
-        cm.createMarket(conditionId, address(collateral), 100e6);
+        emit MultiverseMarkets.UniverseCreated(universeId, address(0), address(0), address(0));
+        cm.createMarket(universeId, address(collateral), 100e6);
     }
 
     function test_createMarket_duplicateReverts() public {
-        _createCondition();
+        _createUniverse();
         collateral.mint(address(this), 100e6);
         collateral.approve(address(cm), 100e6);
-        vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.ConditionAlreadyExists.selector, conditionId));
-        cm.createMarket(conditionId, address(collateral), 100e6);
+        vm.expectRevert(abi.encodeWithSelector(MultiverseMarkets.UniverseAlreadyExists.selector, universeId));
+        cm.createMarket(universeId, address(collateral), 100e6);
     }
 
     function test_createMarket_multipleIndependent() public {
-        (address yes1,) = _createCondition();
-        (address yes2,) = _createCondition2();
+        (address yes1,) = _createUniverse();
+        (address yes2,) = _createUniverse2();
         assertTrue(yes1 != yes2);
     }
 
     function test_createMarket_hookNotSetReverts() public {
-        ConditionalMarkets cm2 = new ConditionalMarkets(IPoolManager(mockPoolManager));
-        vm.expectRevert(ConditionalMarkets.HookNotSet.selector);
-        cm2.createMarket(conditionId, address(collateral), 100e6);
+        MultiverseMarkets cm2 = new MultiverseMarkets(IPoolManager(mockPoolManager));
+        vm.expectRevert(MultiverseMarkets.HookNotSet.selector);
+        cm2.createMarket(universeId, address(collateral), 100e6);
     }
 
     function test_setHook_doubleSetReverts() public {
-        ConditionalMarkets cm2 = new ConditionalMarkets(IPoolManager(mockPoolManager));
+        MultiverseMarkets cm2 = new MultiverseMarkets(IPoolManager(mockPoolManager));
         cm2.setHook(IMarketHook(mockHook));
-        vm.expectRevert(ConditionalMarkets.HookAlreadySet.selector);
+        vm.expectRevert(MultiverseMarkets.HookAlreadySet.selector);
         cm2.setHook(IMarketHook(mockHook));
     }
 
@@ -163,9 +163,9 @@ contract ConditionalMarketsTest is Test {
     // ═══════════════════════════════════════════════════════════════════
 
     function test_split_mintsTokensAndLocksCollateral() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
 
         assertEq(ERC20(yes).balanceOf(alice), 100e6);
         assertEq(ERC20(no).balanceOf(alice), 100e6);
@@ -173,61 +173,61 @@ contract ConditionalMarketsTest is Test {
     }
 
     function test_split_incrementsCollateralBalances() public {
-        _createCondition();
+        _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), 100e6);
+        cm.split(universeId, 100e6);
+        assertEq(cm.collateralBalances(universeId, address(collateral)), 100e6);
     }
 
     function test_split_emitsEvent() public {
-        _createCondition();
+        _createUniverse();
         vm.expectEmit(true, true, false, true);
-        emit ConditionalMarkets.Split(conditionId, alice, 100e6);
+        emit MultiverseMarkets.Split(universeId, alice, 100e6);
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
     }
 
     function test_split_zeroAmountIsNoop() public {
-        _createCondition();
+        _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 0);
+        cm.split(universeId, 0);
         assertEq(collateral.balanceOf(alice), 10_000e6);
     }
 
     function test_split_insufficientCollateralReverts() public {
-        _createCondition();
+        _createUniverse();
         vm.prank(alice);
         vm.expectRevert();
-        cm.split(conditionId, 20_000e6);
+        cm.split(universeId, 20_000e6);
     }
 
     function test_split_noApprovalReverts() public {
-        _createCondition();
+        _createUniverse();
         address charlie = makeAddr("charlie");
         collateral.mint(charlie, 1000e6);
         vm.prank(charlie);
         vm.expectRevert();
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
     }
 
     function test_split_afterResolutionReverts() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        cm.resolve(conditionId, yes);
+        cm.split(universeId, 100e6);
+        cm.resolve(universeId, yes);
 
-        vm.expectRevert(ConditionalMarkets.ConditionAlreadyResolved.selector);
+        vm.expectRevert(MultiverseMarkets.UniverseAlreadyResolved.selector);
         vm.prank(alice);
-        cm.split(conditionId, 50e6);
+        cm.split(universeId, 50e6);
     }
 
     function test_split_multipleAccumulate() public {
-        _createCondition();
+        _createUniverse();
         vm.startPrank(alice);
-        cm.split(conditionId, 100e6);
-        cm.split(conditionId, 200e6);
+        cm.split(universeId, 100e6);
+        cm.split(universeId, 200e6);
         vm.stopPrank();
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), 300e6);
+        assertEq(cm.collateralBalances(universeId, address(collateral)), 300e6);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -235,10 +235,10 @@ contract ConditionalMarketsTest is Test {
     // ═══════════════════════════════════════════════════════════════════
 
     function test_merge_burnsTokensAndReturnsCollateral() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
         vm.startPrank(alice);
-        cm.split(conditionId, 100e6);
-        cm.merge(conditionId, 60e6);
+        cm.split(universeId, 100e6);
+        cm.merge(universeId, 60e6);
         vm.stopPrank();
 
         assertEq(ERC20(yes).balanceOf(alice), 40e6);
@@ -247,53 +247,53 @@ contract ConditionalMarketsTest is Test {
     }
 
     function test_merge_decrementsCollateralBalances() public {
-        _createCondition();
+        _createUniverse();
         vm.startPrank(alice);
-        cm.split(conditionId, 100e6);
-        cm.merge(conditionId, 30e6);
+        cm.split(universeId, 100e6);
+        cm.merge(universeId, 30e6);
         vm.stopPrank();
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), 70e6);
+        assertEq(cm.collateralBalances(universeId, address(collateral)), 70e6);
     }
 
     function test_merge_emitsEvent() public {
-        _createCondition();
+        _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
 
         vm.expectEmit(true, true, false, true);
-        emit ConditionalMarkets.Merged(conditionId, alice, 60e6);
+        emit MultiverseMarkets.Merged(universeId, alice, 60e6);
         vm.prank(alice);
-        cm.merge(conditionId, 60e6);
+        cm.merge(universeId, 60e6);
     }
 
     function test_merge_zeroAmountIsNoop() public {
-        _createCondition();
+        _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
         vm.prank(alice);
-        cm.merge(conditionId, 0);
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), 100e6);
+        cm.merge(universeId, 0);
+        assertEq(cm.collateralBalances(universeId, address(collateral)), 100e6);
     }
 
     function test_merge_insufficientTokensReverts() public {
-        _createCondition();
+        _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
 
         vm.prank(alice);
         vm.expectRevert();
-        cm.merge(conditionId, 200e6);
+        cm.merge(universeId, 200e6);
     }
 
     function test_merge_afterResolutionReverts() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        cm.resolve(conditionId, yes);
+        cm.split(universeId, 100e6);
+        cm.resolve(universeId, yes);
 
-        vm.expectRevert(ConditionalMarkets.ConditionAlreadyResolved.selector);
+        vm.expectRevert(MultiverseMarkets.UniverseAlreadyResolved.selector);
         vm.prank(alice);
-        cm.merge(conditionId, 50e6);
+        cm.merge(universeId, 50e6);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -301,43 +301,43 @@ contract ConditionalMarketsTest is Test {
     // ═══════════════════════════════════════════════════════════════════
 
     function test_resolve_withYesWinner() public {
-        (address yes,) = _createCondition();
-        cm.resolve(conditionId, yes);
-        assertEq(cm.resolved(conditionId), yes);
+        (address yes,) = _createUniverse();
+        cm.resolve(universeId, yes);
+        assertEq(cm.resolved(universeId), yes);
     }
 
     function test_resolve_withNoWinner() public {
-        (, address no) = _createCondition();
-        cm.resolve(conditionId, no);
-        assertEq(cm.resolved(conditionId), no);
+        (, address no) = _createUniverse();
+        cm.resolve(universeId, no);
+        assertEq(cm.resolved(universeId), no);
     }
 
     function test_resolve_emitsEvent() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.expectEmit(true, true, false, false);
-        emit ConditionalMarkets.Resolved(conditionId, yes);
-        cm.resolve(conditionId, yes);
+        emit MultiverseMarkets.Resolved(universeId, yes);
+        cm.resolve(universeId, yes);
     }
 
     function test_resolve_invalidWinnerReverts() public {
-        _createCondition();
-        vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.InvalidWinner.selector, address(0xdead)));
-        cm.resolve(conditionId, address(0xdead));
+        _createUniverse();
+        vm.expectRevert(abi.encodeWithSelector(MultiverseMarkets.InvalidWinner.selector, address(0xdead)));
+        cm.resolve(universeId, address(0xdead));
     }
 
     function test_resolve_doubleResolveReverts() public {
-        (address yes,) = _createCondition();
-        cm.resolve(conditionId, yes);
-        vm.expectRevert(ConditionalMarkets.ConditionAlreadyResolved.selector);
-        cm.resolve(conditionId, yes);
+        (address yes,) = _createUniverse();
+        cm.resolve(universeId, yes);
+        vm.expectRevert(MultiverseMarkets.UniverseAlreadyResolved.selector);
+        cm.resolve(universeId, yes);
     }
 
     function test_resolve_permissionless() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         address random = makeAddr("random");
         vm.prank(random);
-        cm.resolve(conditionId, yes);
-        assertEq(cm.resolved(conditionId), yes);
+        cm.resolve(universeId, yes);
+        assertEq(cm.resolved(universeId), yes);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -345,10 +345,10 @@ contract ConditionalMarketsTest is Test {
     // ═══════════════════════════════════════════════════════════════════
 
     function test_redeem_burnsWinningTokensAndReturnsCollateral() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        cm.resolve(conditionId, yes);
+        cm.split(universeId, 100e6);
+        cm.resolve(universeId, yes);
 
         vm.prank(alice);
         cm.redeem(yes, 100e6);
@@ -358,71 +358,71 @@ contract ConditionalMarketsTest is Test {
     }
 
     function test_redeem_emitsEvent() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        cm.resolve(conditionId, yes);
+        cm.split(universeId, 100e6);
+        cm.resolve(universeId, yes);
 
         vm.expectEmit(true, true, true, true);
-        emit ConditionalMarkets.Redeemed(conditionId, alice, yes, 100e6);
+        emit MultiverseMarkets.Redeemed(universeId, alice, yes, 100e6);
         vm.prank(alice);
         cm.redeem(yes, 100e6);
     }
 
     function test_redeem_zeroAmountReverts() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        cm.resolve(conditionId, yes);
+        cm.split(universeId, 100e6);
+        cm.resolve(universeId, yes);
 
-        vm.expectRevert(ConditionalMarkets.ZeroAmount.selector);
+        vm.expectRevert(MultiverseMarkets.ZeroAmount.selector);
         vm.prank(alice);
         cm.redeem(yes, 0);
     }
 
     function test_redeem_unresolvedReverts() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
 
-        vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.ConditionNotResolved.selector, conditionId));
+        vm.expectRevert(abi.encodeWithSelector(MultiverseMarkets.UniverseNotResolved.selector, universeId));
         vm.prank(alice);
         cm.redeem(yes, 100e6);
     }
 
     function test_redeem_losingTokenReverts() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        cm.resolve(conditionId, yes);
+        cm.split(universeId, 100e6);
+        cm.resolve(universeId, yes);
 
-        vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.TokenNotWinner.selector, no));
+        vm.expectRevert(abi.encodeWithSelector(MultiverseMarkets.TokenNotWinner.selector, no));
         vm.prank(alice);
         cm.redeem(no, 100e6);
     }
 
     function test_redeem_unknownTokenReverts() public {
-        _createCondition();
-        vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.UnknownToken.selector, address(0xbeef)));
+        _createUniverse();
+        vm.expectRevert(abi.encodeWithSelector(MultiverseMarkets.UnknownToken.selector, address(0xbeef)));
         cm.redeem(address(0xbeef), 100e6);
     }
 
     function test_redeem_insufficientBalanceReverts() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        cm.resolve(conditionId, yes);
+        cm.split(universeId, 100e6);
+        cm.resolve(universeId, yes);
 
-        vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.InsufficientBalance.selector, yes, 200e6, 100e6));
+        vm.expectRevert(abi.encodeWithSelector(MultiverseMarkets.InsufficientBalance.selector, yes, 200e6, 100e6));
         vm.prank(alice);
         cm.redeem(yes, 200e6);
     }
 
     function test_redeem_partial() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
-        cm.resolve(conditionId, yes);
+        cm.split(universeId, 100e6);
+        cm.resolve(universeId, yes);
 
         vm.prank(alice);
         cm.redeem(yes, 40e6);
@@ -436,29 +436,29 @@ contract ConditionalMarketsTest is Test {
     // ═══════════════════════════════════════════════════════════════════
 
     function test_lifecycle_splitResolveRedeem() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
 
         vm.prank(alice);
-        cm.split(conditionId, 500e6);
+        cm.split(universeId, 500e6);
 
-        cm.resolve(conditionId, yes);
+        cm.resolve(universeId, yes);
 
         vm.prank(alice);
         cm.redeem(yes, 500e6);
 
         assertEq(collateral.balanceOf(alice), 10_000e6);
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), 0);
+        assertEq(cm.collateralBalances(universeId, address(collateral)), 0);
     }
 
     function test_lifecycle_splitPartialMergeResolveRedeem() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
 
         vm.startPrank(alice);
-        cm.split(conditionId, 100e6);
-        cm.merge(conditionId, 30e6);
+        cm.split(universeId, 100e6);
+        cm.merge(universeId, 30e6);
         vm.stopPrank();
 
-        cm.resolve(conditionId, yes);
+        cm.resolve(universeId, yes);
 
         vm.prank(alice);
         cm.redeem(yes, 70e6);
@@ -469,15 +469,15 @@ contract ConditionalMarketsTest is Test {
     }
 
     function test_lifecycle_transferAndRedeem() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
 
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
 
         vm.prank(alice);
         ERC20(yes).transfer(bob, 60e6);
 
-        cm.resolve(conditionId, yes);
+        cm.resolve(universeId, yes);
 
         vm.prank(alice);
         cm.redeem(yes, 40e6);
@@ -489,17 +489,17 @@ contract ConditionalMarketsTest is Test {
     }
 
     function test_lifecycle_splitFullMergeZeroResidual() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
 
         vm.startPrank(alice);
-        cm.split(conditionId, 100e6);
-        cm.merge(conditionId, 100e6);
+        cm.split(universeId, 100e6);
+        cm.merge(universeId, 100e6);
         vm.stopPrank();
 
         assertEq(ERC20(yes).balanceOf(alice), 0);
         assertEq(ERC20(no).balanceOf(alice), 0);
         assertEq(collateral.balanceOf(alice), 10_000e6);
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), 0);
+        assertEq(cm.collateralBalances(universeId, address(collateral)), 0);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -507,46 +507,46 @@ contract ConditionalMarketsTest is Test {
     // ═══════════════════════════════════════════════════════════════════
 
     function test_invariant_yesNoSupplyEqualAfterSplit() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
         vm.prank(bob);
-        cm.split(conditionId, 200e6);
+        cm.split(universeId, 200e6);
         assertEq(ERC20(yes).totalSupply(), ERC20(no).totalSupply());
     }
 
     function test_invariant_yesNoSupplyEqualAfterMerge() public {
-        (address yes, address no) = _createCondition();
+        (address yes, address no) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
         vm.prank(alice);
-        cm.merge(conditionId, 30e6);
+        cm.merge(universeId, 30e6);
         assertEq(ERC20(yes).totalSupply(), ERC20(no).totalSupply());
     }
 
     function test_invariant_collateralBalanceEqualsSupply() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
         vm.prank(alice);
-        cm.split(conditionId, 100e6);
+        cm.split(universeId, 100e6);
         vm.prank(bob);
-        cm.split(conditionId, 200e6);
+        cm.split(universeId, 200e6);
         vm.prank(alice);
-        cm.merge(conditionId, 50e6);
+        cm.merge(universeId, 50e6);
 
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), ERC20(yes).totalSupply());
+        assertEq(cm.collateralBalances(universeId, address(collateral)), ERC20(yes).totalSupply());
     }
 
     function test_invariant_contractBalanceGteCollateralBalances() public {
-        _createCondition();
-        _createCondition2();
+        _createUniverse();
+        _createUniverse2();
 
         vm.startPrank(alice);
-        cm.split(conditionId, 100e6);
-        cm.split(conditionId2, 200e6);
+        cm.split(universeId, 100e6);
+        cm.split(universeId2, 200e6);
         vm.stopPrank();
 
-        uint256 totalTracked = cm.collateralBalances(conditionId, address(collateral))
-            + cm.collateralBalances(conditionId2, address(collateral));
+        uint256 totalTracked = cm.collateralBalances(universeId, address(collateral))
+            + cm.collateralBalances(universeId2, address(collateral));
         assertGe(collateral.balanceOf(address(cm)), totalTracked);
     }
 
@@ -554,59 +554,59 @@ contract ConditionalMarketsTest is Test {
     // Edge Cases
     // ═══════════════════════════════════════════════════════════════════
 
-    function test_edge_zeroConditionIdReverts() public {
+    function test_edge_zeroUniverseIdReverts() public {
         if (!cm.hookSet()) {
             vm.mockCall(mockHook, abi.encodeWithSelector(IMarketHook.onCreateMarket.selector), "");
             cm.setHook(IMarketHook(mockHook));
         }
-        vm.expectRevert(ConditionalMarkets.InvalidConditionId.selector);
+        vm.expectRevert(MultiverseMarkets.InvalidUniverseId.selector);
         cm.createMarket(bytes32(0), address(collateral), 100e6);
     }
 
-    function test_edge_duplicateConditionIdReverts() public {
-        _createCondition();
+    function test_edge_duplicateUniverseIdReverts() public {
+        _createUniverse();
         collateral.mint(address(this), 100e6);
         collateral.approve(address(cm), 100e6);
-        vm.expectRevert(abi.encodeWithSelector(ConditionalMarkets.ConditionAlreadyExists.selector, conditionId));
-        cm.createMarket(conditionId, address(collateral), 100e6);
+        vm.expectRevert(abi.encodeWithSelector(MultiverseMarkets.UniverseAlreadyExists.selector, universeId));
+        cm.createMarket(universeId, address(collateral), 100e6);
     }
 
-    function test_edge_twoConditionsSameCollateralIndependent() public {
-        _createCondition();
-        _createCondition2();
+    function test_edge_twoUniversesSameCollateralIndependent() public {
+        _createUniverse();
+        _createUniverse2();
 
         vm.startPrank(alice);
-        cm.split(conditionId, 100e6);
-        cm.split(conditionId2, 200e6);
+        cm.split(universeId, 100e6);
+        cm.split(universeId2, 200e6);
         vm.stopPrank();
 
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), 100e6);
-        assertEq(cm.collateralBalances(conditionId2, address(collateral)), 200e6);
+        assertEq(cm.collateralBalances(universeId, address(collateral)), 100e6);
+        assertEq(cm.collateralBalances(universeId2, address(collateral)), 200e6);
     }
 
-    function test_edge_outcomeTokenDirectMintByNonOwnerReverts() public {
-        (address yes, address no) = _createCondition();
+    function test_edge_multiverseTokenDirectMintByNonOwnerReverts() public {
+        (address yes, address no) = _createUniverse();
         vm.expectRevert();
-        OutcomeToken(yes).mint(alice, 100e6);
+        MultiverseToken(yes).mint(alice, 100e6);
         vm.expectRevert();
-        OutcomeToken(no).burn(alice, 100e6);
+        MultiverseToken(no).burn(alice, 100e6);
     }
 
     function test_edge_redeemAfterPartialMerge() public {
-        (address yes,) = _createCondition();
+        (address yes,) = _createUniverse();
 
         vm.startPrank(alice);
-        cm.split(conditionId, 100e6);
-        cm.merge(conditionId, 30e6);
+        cm.split(universeId, 100e6);
+        cm.merge(universeId, 30e6);
         vm.stopPrank();
 
-        cm.resolve(conditionId, yes);
+        cm.resolve(universeId, yes);
 
         vm.prank(alice);
         cm.redeem(yes, 70e6);
 
         assertEq(collateral.balanceOf(alice), 10_000e6);
-        assertEq(cm.collateralBalances(conditionId, address(collateral)), 0);
+        assertEq(cm.collateralBalances(universeId, address(collateral)), 0);
     }
 
     // ═══════════════════════════════════════════════════════════════════

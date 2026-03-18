@@ -80,8 +80,8 @@ Deployed on **Unichain Sepolia**:
 
 | Contract | Address |
 |----------|---------|
-| `MultiverseMarkets` | `[0x06fb682A2C6B52e090D2b66621c05494FBb67083](https://sepolia.uniscan.xyz/address/0x06fb682A2C6B52e090D2b66621c05494FBb67083)` |
-| `MultiverseHook` | `[0x021823d2B63455fbE66B08a34475Aae8A0ae4A88](https://sepolia.uniscan.xyz/address/0x021823d2B63455fbE66B08a34475Aae8A0ae4A88)` |
+| `MultiverseMarkets` | [`0x06fb682A2C6B52e090D2b66621c05494FBb67083`](https://sepolia.uniscan.xyz/address/0x06fb682A2C6B52e090D2b66621c05494FBb67083) |
+| `MultiverseHook` | [`0x021823d2B63455fbE66B08a34475Aae8A0ae4A88`](https://sepolia.uniscan.xyz/address/0x021823d2B63455fbE66B08a34475Aae8A0ae4A88) |
 
 > [!NOTE]
 > Contract addresses will be updated after deployment.

@@ -3,6 +3,7 @@ pragma solidity ^0.8.13;
 
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {ReentrancyGuardTransient} from "solady/utils/ReentrancyGuardTransient.sol";
 import {MultiverseToken} from "./MultiverseToken.sol";
 import {IMarketHook} from "./IMarketHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -13,7 +14,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Factory + escrow for binary prediction markets.
 /// Deploys YES/NO tokens per universe, handles split/merge/redeem lifecycle.
-contract MultiverseMarkets {
+contract MultiverseMarkets is ReentrancyGuardTransient {
     // ── Data Model ──────────────────────────────────────────────────────
 
     struct Universe {
@@ -34,6 +35,11 @@ contract MultiverseMarkets {
     mapping(address => bytes32) public tokenUniverse;
     mapping(bytes32 => address) public creatorOf;
 
+    // ── Resolution Timelock ────────────────────────────────────────────
+    mapping(bytes32 => address) public proposedWinner;
+    mapping(bytes32 => uint256) public proposedAt;
+    uint256 public constant RESOLUTION_DELAY = 24 hours;
+
     // ── Errors ──────────────────────────────────────────────────────────
 
     error InvalidUniverseId();
@@ -48,6 +54,10 @@ contract MultiverseMarkets {
     error HookAlreadySet();
     error HookNotSet();
     error NotCreatorOrAdmin();
+    error NotAdmin();
+    error ResolutionPending();
+    error ResolutionNotReady();
+    error NoResolutionProposed();
 
     // ── Events ──────────────────────────────────────────────────────────
 
@@ -60,6 +70,9 @@ contract MultiverseMarkets {
     event Redeemed(
         bytes32 indexed universeId, address indexed sender, address indexed token, uint256 amount
     );
+    event ResolutionProposed(bytes32 indexed universeId, address indexed winner, uint256 proposedAt);
+    event ResolutionFinalized(bytes32 indexed universeId, address indexed winner);
+    event ResolutionCancelled(bytes32 indexed universeId);
 
     // ── Modifiers ───────────────────────────────────────────────────────
 
@@ -78,11 +91,13 @@ contract MultiverseMarkets {
     // ── External Functions ──────────────────────────────────────────────
 
     function setHook(IMarketHook _hook) external {
+        if (msg.sender != admin) revert NotAdmin();
         if (hookSet) revert HookAlreadySet();
         hook = _hook;
         hookSet = true;
     }
 
+    // Note: no nonReentrant here because createMarket → hook.onCreateMarket → split() is an expected callback
     function createMarket(bytes32 universeId, address collateralToken, uint256 amount) external {
         if (!hookSet) revert HookNotSet();
         if (universeId == bytes32(0)) revert InvalidUniverseId();
@@ -114,13 +129,16 @@ contract MultiverseMarkets {
         hook.onCreateMarket(universeId, collateralToken, address(yesToken), address(noToken), amount);
 
         // Initialize 3 pools
+        // LMSR starts with equal reserves -> 50/50 pricing -> tick 0 (1:1 ratio)
+        // If initial reserves are ever asymmetric, sqrtPrice must be recalculated
         uint160 sqrtPrice1_1 = TickMath.getSqrtPriceAtTick(0);
-        poolManager.initialize(_makePoolKey(Currency.wrap(collateralToken), Currency.wrap(address(yesToken))), sqrtPrice1_1);
-        poolManager.initialize(_makePoolKey(Currency.wrap(collateralToken), Currency.wrap(address(noToken))), sqrtPrice1_1);
-        poolManager.initialize(_makePoolKey(Currency.wrap(address(yesToken)), Currency.wrap(address(noToken))), sqrtPrice1_1);
+        try poolManager.initialize(_makePoolKey(Currency.wrap(collateralToken), Currency.wrap(address(yesToken))), sqrtPrice1_1) {} catch {}
+        try poolManager.initialize(_makePoolKey(Currency.wrap(collateralToken), Currency.wrap(address(noToken))), sqrtPrice1_1) {} catch {}
+        try poolManager.initialize(_makePoolKey(Currency.wrap(address(yesToken)), Currency.wrap(address(noToken))), sqrtPrice1_1) {} catch {}
     }
 
-    function split(bytes32 universeId, uint256 amount) external notResolved(universeId) {
+    function split(bytes32 universeId, uint256 amount) external nonReentrant notResolved(universeId) {
+        if (amount == 0) revert ZeroAmount();
         Universe storage c = universes[universeId];
 
         SafeTransferLib.safeTransferFrom(c.collateralToken, msg.sender, address(this), amount);
@@ -132,31 +150,73 @@ contract MultiverseMarkets {
         emit Split(universeId, msg.sender, amount);
     }
 
-    function merge(bytes32 universeId, uint256 amount) external notResolved(universeId) {
+    function merge(bytes32 universeId, uint256 amount) external nonReentrant notResolved(universeId) {
+        if (amount == 0) revert ZeroAmount();
         Universe storage c = universes[universeId];
 
         MultiverseToken(c.yesToken).burn(msg.sender, amount);
         MultiverseToken(c.noToken).burn(msg.sender, amount);
 
-        collateralBalances[universeId][c.collateralToken] -= amount;
+        uint256 bal = collateralBalances[universeId][c.collateralToken];
+        if (bal < amount) revert InsufficientBalance(c.collateralToken, amount, bal);
+        collateralBalances[universeId][c.collateralToken] = bal - amount;
         SafeTransferLib.safeTransfer(c.collateralToken, msg.sender, amount);
 
         emit Merged(universeId, msg.sender, amount);
     }
 
-    function resolve(bytes32 universeId, address winner) external {
+    function proposeResolution(bytes32 universeId, address winner) external {
         if (resolved[universeId] != address(0)) revert UniverseAlreadyResolved();
+        if (proposedWinner[universeId] != address(0)) revert ResolutionPending();
         if (msg.sender != creatorOf[universeId] && msg.sender != admin) revert NotCreatorOrAdmin();
+
+        Universe storage c = universes[universeId];
+        if (winner != c.yesToken && winner != c.noToken) revert InvalidWinner(winner);
+
+        proposedWinner[universeId] = winner;
+        proposedAt[universeId] = block.timestamp;
+
+        emit ResolutionProposed(universeId, winner, block.timestamp);
+    }
+
+    function finalizeResolution(bytes32 universeId) external {
+        if (resolved[universeId] != address(0)) revert UniverseAlreadyResolved();
+        address winner = proposedWinner[universeId];
+        if (winner == address(0)) revert NoResolutionProposed();
+        if (block.timestamp < proposedAt[universeId] + RESOLUTION_DELAY) revert ResolutionNotReady();
+
+        resolved[universeId] = winner;
+        delete proposedWinner[universeId];
+        delete proposedAt[universeId];
+
+        emit ResolutionFinalized(universeId, winner);
+    }
+
+    function cancelResolution(bytes32 universeId) external {
+        if (resolved[universeId] != address(0)) revert UniverseAlreadyResolved();
+        if (proposedWinner[universeId] == address(0)) revert NoResolutionProposed();
+        if (msg.sender != creatorOf[universeId] && msg.sender != admin) revert NotCreatorOrAdmin();
+
+        delete proposedWinner[universeId];
+        delete proposedAt[universeId];
+
+        emit ResolutionCancelled(universeId);
+    }
+
+    /// @notice Legacy resolve for backward compatibility — immediate resolution by admin only
+    function resolve(bytes32 universeId, address winner) external {
+        if (msg.sender != admin) revert NotAdmin();
+        if (resolved[universeId] != address(0)) revert UniverseAlreadyResolved();
 
         Universe storage c = universes[universeId];
         if (winner != c.yesToken && winner != c.noToken) revert InvalidWinner(winner);
 
         resolved[universeId] = winner;
 
-        emit Resolved(universeId, winner);
+        emit ResolutionFinalized(universeId, winner);
     }
 
-    function redeem(address token, uint256 amount) external {
+    function redeem(address token, uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
 
         bytes32 universeId = tokenUniverse[token];
@@ -172,7 +232,9 @@ contract MultiverseMarkets {
         Universe storage c = universes[universeId];
 
         MultiverseToken(token).burn(msg.sender, amount);
-        collateralBalances[universeId][c.collateralToken] -= amount;
+        uint256 bal = collateralBalances[universeId][c.collateralToken];
+        if (bal < amount) revert InsufficientBalance(c.collateralToken, amount, bal);
+        collateralBalances[universeId][c.collateralToken] = bal - amount;
         SafeTransferLib.safeTransfer(c.collateralToken, msg.sender, amount);
 
         emit Redeemed(universeId, msg.sender, token, amount);

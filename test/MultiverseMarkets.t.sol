@@ -187,11 +187,11 @@ contract MultiverseMarketsTest is Test {
         cm.split(universeId, 100e6);
     }
 
-    function test_split_zeroAmountIsNoop() public {
+    function test_split_zeroAmountReverts() public {
         _createUniverse();
+        vm.expectRevert(MultiverseMarkets.ZeroAmount.selector);
         vm.prank(alice);
         cm.split(universeId, 0);
-        assertEq(collateral.balanceOf(alice), 10_000e6);
     }
 
     function test_split_insufficientCollateralReverts() public {
@@ -266,13 +266,13 @@ contract MultiverseMarketsTest is Test {
         cm.merge(universeId, 60e6);
     }
 
-    function test_merge_zeroAmountIsNoop() public {
+    function test_merge_zeroAmountReverts() public {
         _createUniverse();
         vm.prank(alice);
         cm.split(universeId, 100e6);
+        vm.expectRevert(MultiverseMarkets.ZeroAmount.selector);
         vm.prank(alice);
         cm.merge(universeId, 0);
-        assertEq(cm.collateralBalances(universeId, address(collateral)), 100e6);
     }
 
     function test_merge_insufficientTokensReverts() public {
@@ -315,7 +315,7 @@ contract MultiverseMarketsTest is Test {
     function test_resolve_emitsEvent() public {
         (address yes,) = _createUniverse();
         vm.expectEmit(true, true, false, false);
-        emit MultiverseMarkets.Resolved(universeId, yes);
+        emit MultiverseMarkets.ResolutionFinalized(universeId, yes);
         cm.resolve(universeId, yes);
     }
 
@@ -332,16 +332,16 @@ contract MultiverseMarketsTest is Test {
         cm.resolve(universeId, yes);
     }
 
-    function test_resolve_nonCreatorReverts() public {
+    function test_resolve_nonAdminReverts() public {
         (address yes,) = _createUniverse();
         address random = makeAddr("random");
         vm.prank(random);
-        vm.expectRevert(MultiverseMarkets.NotCreatorOrAdmin.selector);
+        vm.expectRevert(MultiverseMarkets.NotAdmin.selector);
         cm.resolve(universeId, yes);
     }
 
-    function test_resolve_creatorSucceeds() public {
-        // alice creates the market, alice resolves
+    function test_proposeResolution_creatorSucceeds() public {
+        // alice creates the market, alice proposes, then finalizes after delay
         if (!cm.hookSet()) {
             vm.mockCall(mockHook, abi.encodeWithSelector(IMarketHook.onCreateMarket.selector), "");
             cm.setHook(IMarketHook(mockHook));
@@ -351,8 +351,16 @@ contract MultiverseMarketsTest is Test {
         collateral.approve(address(cm), 100e6);
         cm.createMarket(universeId, address(collateral), 100e6);
         (, address yes,) = cm.universes(universeId);
-        cm.resolve(universeId, yes);
+        cm.proposeResolution(universeId, yes);
         vm.stopPrank();
+
+        // Cannot finalize immediately
+        vm.expectRevert(MultiverseMarkets.ResolutionNotReady.selector);
+        cm.finalizeResolution(universeId);
+
+        // Warp past delay
+        vm.warp(block.timestamp + cm.RESOLUTION_DELAY() + 1);
+        cm.finalizeResolution(universeId);
         assertEq(cm.resolved(universeId), yes);
     }
 
@@ -373,8 +381,8 @@ contract MultiverseMarketsTest is Test {
         assertEq(cm.resolved(universeId), yes);
     }
 
-    function test_resolve_nonCreatorNonAdminReverts() public {
-        // alice creates, bob resolves → reverts
+    function test_proposeResolution_nonCreatorNonAdminReverts() public {
+        // alice creates, bob proposes → reverts
         if (!cm.hookSet()) {
             vm.mockCall(mockHook, abi.encodeWithSelector(IMarketHook.onCreateMarket.selector), "");
             cm.setHook(IMarketHook(mockHook));
@@ -387,7 +395,30 @@ contract MultiverseMarketsTest is Test {
         (, address yes,) = cm.universes(universeId);
         vm.prank(bob);
         vm.expectRevert(MultiverseMarkets.NotCreatorOrAdmin.selector);
-        cm.resolve(universeId, yes);
+        cm.proposeResolution(universeId, yes);
+    }
+
+    function test_cancelResolution_succeeds() public {
+        if (!cm.hookSet()) {
+            vm.mockCall(mockHook, abi.encodeWithSelector(IMarketHook.onCreateMarket.selector), "");
+            cm.setHook(IMarketHook(mockHook));
+        }
+        collateral.mint(alice, 100e6);
+        vm.startPrank(alice);
+        collateral.approve(address(cm), 100e6);
+        cm.createMarket(universeId, address(collateral), 100e6);
+        (, address yes,) = cm.universes(universeId);
+        cm.proposeResolution(universeId, yes);
+        cm.cancelResolution(universeId);
+        vm.stopPrank();
+        assertEq(cm.proposedWinner(universeId), address(0));
+    }
+
+    function test_setHook_nonAdminReverts() public {
+        MultiverseMarkets cm2 = new MultiverseMarkets(IPoolManager(mockPoolManager));
+        vm.prank(alice);
+        vm.expectRevert(MultiverseMarkets.NotAdmin.selector);
+        cm2.setHook(IMarketHook(mockHook));
     }
 
     function test_createMarket_storesCreator() public {

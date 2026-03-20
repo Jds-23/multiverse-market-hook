@@ -32,7 +32,7 @@ contract SimpleERC20 is ERC20, Ownable {
         _mintCap = mintCap;
     }
 
-    function mint(address recipient, uint256 value) public virtual {
+    function mint(address recipient, uint256 value) public virtual onlyOwner {
         require(value < _mintCap, "Mint cap exceeded");
         _mint(recipient, value);
     }

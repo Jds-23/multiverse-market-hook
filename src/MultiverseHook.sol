@@ -8,11 +8,14 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {SafeCastLib} from "solady/utils/SafeCastLib.sol";
+import {ERC20} from "solady/tokens/ERC20.sol";
+import {ReentrancyGuardTransient} from "solady/utils/ReentrancyGuardTransient.sol";
 import {MultiverseMarkets} from "./MultiverseMarkets.sol";
 import {LMSRMath} from "./LMSRMath.sol";
 import {IMarketHook} from "./IMarketHook.sol";
 
-contract MultiverseHook is BaseHook, IMarketHook {
+contract MultiverseHook is BaseHook, IMarketHook, ReentrancyGuardTransient {
     error NotImplementedYet();
     error UnknownToken();
     error MarketResolved();
@@ -21,6 +24,7 @@ contract MultiverseHook is BaseHook, IMarketHook {
     error TokenNotWinner();
     error OnlyMultiverseMarket();
     error MarketAlreadyExists();
+    error SlippageExceeded();
 
     uint8 internal constant DECIMALS = 6;
 
@@ -71,7 +75,7 @@ contract MultiverseHook is BaseHook, IMarketHook {
         address yesToken,
         address noToken,
         uint256 amount
-    ) external override {
+    ) external override nonReentrant {
         if (msg.sender != address(multiverseMarket)) revert OnlyMultiverseMarket();
         if (Currency.unwrap(markets[universeId].collateralToken) != address(0)) revert MarketAlreadyExists();
 
@@ -88,11 +92,12 @@ contract MultiverseHook is BaseHook, IMarketHook {
         tokenToUniverse[yesToken] = universeId;
         tokenToUniverse[noToken] = universeId;
 
-        SafeTransferLib.safeApprove(collateral, address(multiverseMarket), amount);
+        // C-3 + M-3: Use max approval — hook trusts immutable multiverseMarket
+        SafeTransferLib.safeApprove(collateral, address(multiverseMarket), type(uint256).max);
         multiverseMarket.split(universeId, amount);
     }
 
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
@@ -103,8 +108,8 @@ contract MultiverseHook is BaseHook, IMarketHook {
         bytes32 cid = _resolveUniverse(tokenIn, tokenOut);
 
         uint8 action = _classifySwap(cid, tokenIn, tokenOut);
-        if (action == 1) return _executeBuy(cid, tokenIn, tokenOut, params);
-        if (action == 2) return _executeSell(cid, tokenIn, tokenOut, params);
+        if (action == 1) return _executeBuy(cid, tokenIn, tokenOut, params, hookData);
+        if (action == 2) return _executeSell(cid, tokenIn, tokenOut, params, hookData);
         if (action == 3) return _executeRedeem(cid, tokenIn, tokenOut, params);
         revert CrossUniverseSwapsNotSupportedYet(); // unreachable if _classifySwap is correct
     }
@@ -176,7 +181,7 @@ contract MultiverseHook is BaseHook, IMarketHook {
         revert UnknownToken();
     }
 
-    function _executeBuy(bytes32 cid, Currency tokenIn, Currency tokenOut, SwapParams calldata params)
+    function _executeBuy(bytes32 cid, Currency tokenIn, Currency tokenOut, SwapParams calldata params, bytes calldata hookData)
         private
         returns (bytes4, BeforeSwapDelta, uint24)
     {
@@ -211,10 +216,15 @@ contract MultiverseHook is BaseHook, IMarketHook {
 
         if (cost == 0 || delta == 0) revert InsufficientLiquidity();
 
+        // M-4: Slippage protection via hookData
+        if (hookData.length >= 32) {
+            uint256 limit = abi.decode(hookData, (uint256));
+            if (params.amountSpecified > 0 && cost > limit) revert SlippageExceeded();
+            if (params.amountSpecified < 0 && delta < limit) revert SlippageExceeded();
+        }
+
         poolManager.take(tokenIn, address(this), cost);
-        SafeTransferLib.safeApprove(
-            Currency.unwrap(state.collateralToken), address(multiverseMarket), cost
-        );
+        // C-3/M-3: Max approval set once in onCreateMarket — no per-trade approval needed
         multiverseMarket.split(cid, cost);
 
         poolManager.sync(tokenOut);
@@ -233,14 +243,19 @@ contract MultiverseHook is BaseHook, IMarketHook {
         }
         state.reserveCollateral += cost;
 
+        // H-1: Reserve drift detection — fail fast if reserves diverge from actual balances
+        assert(ERC20(Currency.unwrap(state.yesToken)).balanceOf(address(this)) >= state.reserveYes);
+        assert(ERC20(Currency.unwrap(state.noToken)).balanceOf(address(this)) >= state.reserveNo);
+
+        // H-4: Safe casts to prevent silent truncation
         if (params.amountSpecified > 0) {
-            return (this.beforeSwap.selector, toBeforeSwapDelta(-int128(int256(delta)), int128(int256(cost))), 0);
+            return (this.beforeSwap.selector, toBeforeSwapDelta(-SafeCastLib.toInt128(int256(delta)), SafeCastLib.toInt128(int256(cost))), 0);
         } else {
-            return (this.beforeSwap.selector, toBeforeSwapDelta(int128(int256(cost)), -int128(int256(delta))), 0);
+            return (this.beforeSwap.selector, toBeforeSwapDelta(SafeCastLib.toInt128(int256(cost)), -SafeCastLib.toInt128(int256(delta))), 0);
         }
     }
 
-    function _executeSell(bytes32 cid, Currency tokenIn, Currency tokenOut, SwapParams calldata params)
+    function _executeSell(bytes32 cid, Currency tokenIn, Currency tokenOut, SwapParams calldata params, bytes calldata hookData)
         private
         returns (bytes4, BeforeSwapDelta, uint24)
     {
@@ -277,6 +292,18 @@ contract MultiverseHook is BaseHook, IMarketHook {
 
         if (tokensIn == 0 || collateralOut == 0) revert InsufficientLiquidity();
 
+        // M-4: Slippage protection via hookData
+        if (hookData.length >= 32) {
+            uint256 limit = abi.decode(hookData, (uint256));
+            if (params.amountSpecified < 0 && collateralOut < limit) revert SlippageExceeded();
+            if (params.amountSpecified > 0 && tokensIn > limit) revert SlippageExceeded();
+        }
+
+        // H-2: Verify hook holds enough of the counter-token for merge
+        Currency counterToken = _currenciesEqual(tokenIn, state.yesToken) ? state.noToken : state.yesToken;
+        uint256 counterBal = ERC20(Currency.unwrap(counterToken)).balanceOf(address(this));
+        if (counterBal < collateralOut) revert InsufficientLiquidity();
+
         poolManager.take(tokenIn, address(this), tokensIn);
         multiverseMarket.merge(cid, collateralOut);
 
@@ -296,14 +323,21 @@ contract MultiverseHook is BaseHook, IMarketHook {
         }
         state.reserveCollateral -= collateralOut;
 
+        // H-1: Reserve drift detection
+        assert(ERC20(Currency.unwrap(state.yesToken)).balanceOf(address(this)) >= state.reserveYes);
+        assert(ERC20(Currency.unwrap(state.noToken)).balanceOf(address(this)) >= state.reserveNo);
+
+        // H-4: Safe casts
         if (params.amountSpecified < 0) {
-            return (this.beforeSwap.selector, toBeforeSwapDelta(int128(int256(tokensIn)), -int128(int256(collateralOut))), 0);
+            return (this.beforeSwap.selector, toBeforeSwapDelta(SafeCastLib.toInt128(int256(tokensIn)), -SafeCastLib.toInt128(int256(collateralOut))), 0);
         } else {
-            return (this.beforeSwap.selector, toBeforeSwapDelta(-int128(int256(collateralOut)), int128(int256(tokensIn))), 0);
+            return (this.beforeSwap.selector, toBeforeSwapDelta(-SafeCastLib.toInt128(int256(collateralOut)), SafeCastLib.toInt128(int256(tokensIn))), 0);
         }
     }
 
-    function _executeRedeem(bytes32, Currency tokenIn, Currency tokenOut, SwapParams calldata params)
+    // H-3: Named `cid` parameter + reserve updates after redeem
+    // L-3: Measure actual collateral received instead of assuming 1:1
+    function _executeRedeem(bytes32 cid, Currency tokenIn, Currency tokenOut, SwapParams calldata params)
         private
         returns (bytes4, BeforeSwapDelta, uint24)
     {
@@ -312,16 +346,30 @@ contract MultiverseHook is BaseHook, IMarketHook {
             : uint256(params.amountSpecified);
 
         poolManager.take(tokenIn, address(this), amount);
+
+        // L-3: Measure actual collateral received rather than assuming 1:1
+        uint256 colBefore = ERC20(Currency.unwrap(tokenOut)).balanceOf(address(this));
         multiverseMarket.redeem(Currency.unwrap(tokenIn), amount);
+        uint256 colReceived = ERC20(Currency.unwrap(tokenOut)).balanceOf(address(this)) - colBefore;
 
         poolManager.sync(tokenOut);
-        SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), amount);
+        SafeTransferLib.safeTransfer(Currency.unwrap(tokenOut), address(poolManager), colReceived);
         poolManager.settle();
 
-        if (params.amountSpecified < 0) {
-            return (this.beforeSwap.selector, toBeforeSwapDelta(int128(int256(amount)), -int128(int256(amount))), 0);
+        // H-3: Update reserves post-redemption
+        MarketState storage state = markets[cid];
+        if (_currenciesEqual(tokenIn, state.yesToken)) {
+            state.reserveYes -= amount;
         } else {
-            return (this.beforeSwap.selector, toBeforeSwapDelta(-int128(int256(amount)), int128(int256(amount))), 0);
+            state.reserveNo -= amount;
+        }
+        state.reserveCollateral -= colReceived;
+
+        // H-4: Safe casts
+        if (params.amountSpecified < 0) {
+            return (this.beforeSwap.selector, toBeforeSwapDelta(SafeCastLib.toInt128(int256(amount)), -SafeCastLib.toInt128(int256(colReceived))), 0);
+        } else {
+            return (this.beforeSwap.selector, toBeforeSwapDelta(-SafeCastLib.toInt128(int256(colReceived)), SafeCastLib.toInt128(int256(amount))), 0);
         }
     }
 }
